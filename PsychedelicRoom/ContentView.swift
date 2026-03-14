@@ -46,6 +46,12 @@ struct ContentView: View {
                 Slider(value: $appModel.intensity, in: 0.1...2.0, step: 0.1)
             }
 
+            // Opacity control
+            VStack(alignment: .leading) {
+                Text("Opacity: \(Int(appModel.opacity * 100))%")
+                Slider(value: $appModel.opacity, in: 0.0...1.0, step: 0.05)
+            }
+
             // Particles toggle
             Toggle("Particles", isOn: $appModel.particlesEnabled)
                 .toggleStyle(.switch)
@@ -272,6 +278,32 @@ struct ContentView: View {
                         .buttonStyle(.bordered)
                     }
 
+                    // Seek bar
+                    if mediaVM.videoDuration > 0 {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Slider(
+                                value: Binding(
+                                    get: { mediaVM.videoCurrentTime },
+                                    set: { newValue in
+                                        mediaVM.videoCurrentTime = newValue
+                                        mediaVM.seekVideo(to: newValue)
+                                    }
+                                ),
+                                in: 0...max(mediaVM.videoDuration, 1),
+                                onEditingChanged: { editing in
+                                    mediaVM.isSeeking = editing
+                                }
+                            )
+                            HStack {
+                                Text(formatTime(mediaVM.videoCurrentTime))
+                                Spacer()
+                                Text(formatTime(mediaVM.videoDuration))
+                            }
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+
                     // Rotation controls
                     VStack(alignment: .leading) {
                         Text("水平回転: \(Int(mediaVM.videoRotationH))°")
@@ -338,10 +370,20 @@ struct ContentView: View {
                     }
 
                     // Navigation controls
-                    HStack(spacing: 16) {
-                        Button {
-                            mediaVM.slideshowPrev()
-                        } label: {
+                    HStack(spacing: 8) {
+                        Button { mediaVM.slideshowJump(by: -100) } label: {
+                            Text("-100")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button { mediaVM.slideshowJump(by: -10) } label: {
+                            Text("-10")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button { mediaVM.slideshowPrev() } label: {
                             Image(systemName: "backward.fill")
                         }
                         .buttonStyle(.bordered)
@@ -357,10 +399,20 @@ struct ContentView: View {
                         }
                         .buttonStyle(.bordered)
 
-                        Button {
-                            mediaVM.slideshowNext()
-                        } label: {
+                        Button { mediaVM.slideshowNext() } label: {
                             Image(systemName: "forward.fill")
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button { mediaVM.slideshowJump(by: 10) } label: {
+                            Text("+10")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button { mediaVM.slideshowJump(by: 100) } label: {
+                            Text("+100")
+                                .font(.caption2)
                         }
                         .buttonStyle(.bordered)
                     }
@@ -400,6 +452,20 @@ struct ContentView: View {
             }
         }
     }
+}
+
+// MARK: - Helpers
+
+private func formatTime(_ seconds: Double) -> String {
+    guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+    let totalSeconds = Int(seconds)
+    let h = totalSeconds / 3600
+    let m = (totalSeconds % 3600) / 60
+    let s = totalSeconds % 60
+    if h > 0 {
+        return String(format: "%d:%02d:%02d", h, m, s)
+    }
+    return String(format: "%d:%02d", m, s)
 }
 
 // MARK: - Audio Level Visualizer

@@ -13,10 +13,12 @@ struct ImmersiveView: View {
     // Video panel entities
     @State private var videoRootEntity = Entity()
     @State private var videoEntity: ModelEntity?
+    @State private var videoInitialScale: Float = 1.0
 
     // Slideshow panel entities
     @State private var slideshowRootEntity = Entity()
     @State private var slideshowEntity: ModelEntity?
+    @State private var slideshowInitialScale: Float = 1.0
 
     var body: some View {
         RealityView { content in
@@ -36,7 +38,18 @@ struct ImmersiveView: View {
 
             await sceneReconstructor.start()
         } update: { content in
-            // Psychedelic parameters
+            // Read mediaVM properties to register SwiftUI observation
+            // (ensures onChange handlers fire reliably)
+            let _ = mediaVM.videoVersion
+            let _ = mediaVM.videoEnabled
+            let _ = mediaVM.videoRotationH
+            let _ = mediaVM.videoRotationV
+            let _ = mediaVM.slideshowTextureVersion
+            let _ = mediaVM.slideshowEnabled
+            let _ = mediaVM.slideshowRotationH
+            let _ = mediaVM.slideshowRotationV
+
+            // MARK: - Psychedelic parameters
             let filter: Set<MeshAnchor.MeshClassification>?
             if appModel.meshClassificationFilterEnabled {
                 var f: Set<MeshAnchor.MeshClassification> = []
@@ -57,6 +70,7 @@ struct ImmersiveView: View {
                 speed: appModel.speed,
                 intensity: appModel.intensity,
                 style: appModel.patternStyle,
+                opacity: appModel.opacity,
                 particlesEnabled: appModel.particlesEnabled,
                 audioReactiveEnabled: appModel.audioReactiveEnabled,
                 audioSensitivity: appModel.audioSensitivity,
@@ -69,41 +83,49 @@ struct ImmersiveView: View {
                 height: appModel.occlusionPanelHeight,
                 rotationDegrees: appModel.occlusionPanelRotation
             )
-
-            // Video panel enabled/disabled
-            videoRootEntity.isEnabled = mediaVM.videoEnabled && mediaVM.player != nil
-
-            // Video rotation
-            let videoYaw = simd_quatf(angle: mediaVM.videoRotationH * .pi / 180, axis: [0, 1, 0])
-            let videoPitch = simd_quatf(angle: mediaVM.videoRotationV * .pi / 180, axis: [1, 0, 0])
-            videoRootEntity.orientation = videoYaw * videoPitch
-
-            // Slideshow panel enabled/disabled
-            slideshowRootEntity.isEnabled = mediaVM.slideshowEnabled && mediaVM.slideshowTexture != nil
-
-            // Slideshow rotation
-            let ssYaw = simd_quatf(angle: mediaVM.slideshowRotationH * .pi / 180, axis: [0, 1, 0])
-            let ssPitch = simd_quatf(angle: mediaVM.slideshowRotationV * .pi / 180, axis: [1, 0, 0])
-            slideshowRootEntity.orientation = ssYaw * ssPitch
         }
         .gesture(occlusionDragGesture)
         .gesture(panelDragGesture)
+        .gesture(panelMagnifyGesture)
         .task {
             await sceneReconstructor.processUpdates()
         }
+        // MARK: - Video panel onChange handlers
         .onChange(of: mediaVM.videoVersion) {
             recreateVideoEntity()
+            updateVideoVisibility()
         }
+        .onChange(of: mediaVM.videoEnabled) {
+            updateVideoVisibility()
+        }
+        .onChange(of: mediaVM.videoRotationH) {
+            updateVideoRotation()
+        }
+        .onChange(of: mediaVM.videoRotationV) {
+            updateVideoRotation()
+        }
+        // MARK: - Slideshow panel onChange handlers
         .onChange(of: mediaVM.slideshowTextureVersion) {
             recreateSlideshowEntity()
+        }
+        .onChange(of: mediaVM.slideshowEnabled) {
+            updateSlideshowVisibility()
+        }
+        .onChange(of: mediaVM.slideshowRotationH) {
+            updateSlideshowRotation()
+        }
+        .onChange(of: mediaVM.slideshowRotationV) {
+            updateSlideshowRotation()
         }
     }
 
     // MARK: - Video Entity
 
     private func recreateVideoEntity() {
-        // Remove old
-        videoEntity?.removeFromParent()
+        // Remove ALL children to prevent entity accumulation
+        for child in videoRootEntity.children {
+            child.removeFromParent()
+        }
         videoEntity = nil
 
         guard let player = mediaVM.player else { return }
@@ -121,53 +143,88 @@ struct ImmersiveView: View {
 
         videoRootEntity.addChild(entity)
         videoEntity = entity
+        print("Video entity created: \(width)x\(height)")
+    }
+
+    private func updateVideoVisibility() {
+        let shouldShow = mediaVM.videoEnabled && mediaVM.player != nil
+        videoRootEntity.isEnabled = shouldShow
+        print("Video visibility: \(shouldShow), enabled=\(mediaVM.videoEnabled), player=\(mediaVM.player != nil)")
+    }
+
+    private func updateVideoRotation() {
+        let yaw = simd_quatf(angle: mediaVM.videoRotationH * .pi / 180, axis: [0, 1, 0])
+        let pitch = simd_quatf(angle: mediaVM.videoRotationV * .pi / 180, axis: [1, 0, 0])
+        videoRootEntity.orientation = yaw * pitch
     }
 
     // MARK: - Slideshow Entity
 
     private func recreateSlideshowEntity() {
-        slideshowEntity?.removeFromParent()
+        // Remove ALL children to prevent entity accumulation
+        for child in slideshowRootEntity.children {
+            child.removeFromParent()
+        }
         slideshowEntity = nil
 
         guard let leftTexture = mediaVM.slideshowTexture else { return }
 
         let width = Float(mediaVM.slideshowDisplaySize.width)
         let height = Float(mediaVM.slideshowDisplaySize.height)
-        let mesh = MeshResource.generatePlane(width: width, height: height)
 
-        var material: RealityKit.Material
+        Task {
+            let mesh = MeshResource.generatePlane(width: width, height: height)
+            var material: RealityKit.Material
 
-        if mediaVM.slideshowIsStereo, let rightTexture = mediaVM.slideshowRightTexture {
-            // Stereo: use ShaderGraph material with CameraIndexSwitch
-            do {
-                var stereoMaterial = try ShaderGraphMaterial(
-                    named: "/Root/StereoImageMaterial",
-                    from: "StereoImageMaterial",
-                    in: realityKitContentBundle
-                )
-                try stereoMaterial.setParameter(name: "LeftImage", value: .textureResource(leftTexture))
-                try stereoMaterial.setParameter(name: "RightImage", value: .textureResource(rightTexture))
-                material = stereoMaterial
-            } catch {
-                print("Failed to load stereo material: \(error)")
-                var fallback = UnlitMaterial()
-                fallback.color = .init(tint: .white, texture: .init(leftTexture))
-                material = fallback
+            if mediaVM.slideshowIsStereo, let rightTexture = mediaVM.slideshowRightTexture {
+                do {
+                    var stereoMaterial = try await ShaderGraphMaterial(
+                        named: "/Root/StereoImageMaterial",
+                        from: "StereoImageMaterial",
+                        in: realityKitContentBundle
+                    )
+                    try stereoMaterial.setParameter(name: "LeftImage", value: .textureResource(leftTexture))
+                    try stereoMaterial.setParameter(name: "RightImage", value: .textureResource(rightTexture))
+                    material = stereoMaterial
+                } catch {
+                    print("Failed to load stereo material: \(error)")
+                    var fallback = UnlitMaterial()
+                    fallback.color = .init(tint: .white, texture: .init(leftTexture))
+                    material = fallback
+                }
+            } else {
+                var monoMaterial = UnlitMaterial()
+                monoMaterial.color = .init(tint: .white, texture: .init(leftTexture))
+                material = monoMaterial
             }
-        } else {
-            // Mono: use UnlitMaterial
-            var monoMaterial = UnlitMaterial()
-            monoMaterial.color = .init(tint: .white, texture: .init(leftTexture))
-            material = monoMaterial
+
+            // Check again in case a newer update arrived while awaiting
+            for child in slideshowRootEntity.children {
+                child.removeFromParent()
+            }
+
+            let entity = ModelEntity(mesh: mesh, materials: [material])
+            entity.components.set(CollisionComponent(shapes: [.generateBox(width: width, height: height, depth: 0.01)]))
+            entity.components.set(InputTargetComponent(allowedInputTypes: .all))
+            entity.name = "slideshowPanel"
+
+            slideshowRootEntity.addChild(entity)
+            slideshowEntity = entity
+            updateSlideshowVisibility()
+            print("Slideshow entity created: \(width)x\(height), stereo=\(mediaVM.slideshowIsStereo)")
         }
+    }
 
-        let entity = ModelEntity(mesh: mesh, materials: [material])
-        entity.components.set(CollisionComponent(shapes: [.generateBox(width: width, height: height, depth: 0.01)]))
-        entity.components.set(InputTargetComponent(allowedInputTypes: .all))
-        entity.name = "slideshowPanel"
+    private func updateSlideshowVisibility() {
+        let shouldShow = mediaVM.slideshowEnabled && mediaVM.slideshowTexture != nil
+        slideshowRootEntity.isEnabled = shouldShow
+        print("Slideshow visibility: \(shouldShow)")
+    }
 
-        slideshowRootEntity.addChild(entity)
-        slideshowEntity = entity
+    private func updateSlideshowRotation() {
+        let yaw = simd_quatf(angle: mediaVM.slideshowRotationH * .pi / 180, axis: [0, 1, 0])
+        let pitch = simd_quatf(angle: mediaVM.slideshowRotationV * .pi / 180, axis: [1, 0, 0])
+        slideshowRootEntity.orientation = yaw * pitch
     }
 
     // MARK: - Gestures
@@ -178,6 +235,37 @@ struct ImmersiveView: View {
             .onChanged { value in
                 let pos = value.convert(value.location3D, from: .local, to: occlusionPanel.rootEntity)
                 occlusionPanel.panelEntity.position = pos
+            }
+    }
+
+    var panelMagnifyGesture: some Gesture {
+        MagnifyGesture()
+            .targetedToAnyEntity()
+            .onChanged { value in
+                guard let entity = value.entity as? ModelEntity,
+                      (entity.name == "videoPanel" || entity.name == "slideshowPanel"),
+                      let root = entity.parent else { return }
+
+                let initialScale: Float
+                if entity.name == "videoPanel" {
+                    initialScale = videoInitialScale
+                } else {
+                    initialScale = slideshowInitialScale
+                }
+
+                let newScale = initialScale * Float(value.magnification)
+                root.scale = SIMD3<Float>(repeating: max(0.1, min(newScale, 5.0)))
+            }
+            .onEnded { value in
+                guard let entity = value.entity as? ModelEntity,
+                      (entity.name == "videoPanel" || entity.name == "slideshowPanel"),
+                      let root = entity.parent else { return }
+
+                if entity.name == "videoPanel" {
+                    videoInitialScale = root.scale.x
+                } else {
+                    slideshowInitialScale = root.scale.x
+                }
             }
     }
 

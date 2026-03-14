@@ -15,9 +15,14 @@ class MediaPanelViewModel {
     var videoRotationV: Float = 0
     var videoVersion: Int = 0
 
+    var videoCurrentTime: Double = 0
+    var videoDuration: Double = 0
+    var isSeeking: Bool = false
+
     var player: AVPlayer?
     private var videoAccessedURL: URL?
     private var loopObserver: Any?
+    private var timeObserver: Any?
 
     // MARK: - Slideshow Panel
     var slideshowEnabled: Bool = false
@@ -36,6 +41,7 @@ class MediaPanelViewModel {
 
     private var slideshowAccessedURL: URL?
     private var slideshowTimer: Timer?
+    private var slideshowLoadTask: Task<Void, Never>?
 
     // MARK: - Video Methods
 
@@ -50,15 +56,14 @@ class MediaPanelViewModel {
             videoAccessedURL = url
         }
 
+        // Clean up old player BEFORE creating new one
+        cleanupPlayer()
+
         videoURL = url
         let item = AVPlayerItem(url: url)
         let newPlayer = AVPlayer(playerItem: item)
-        self.player = newPlayer
 
         // Loop observer
-        if let old = loopObserver {
-            NotificationCenter.default.removeObserver(old)
-        }
         loopObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
@@ -68,11 +73,50 @@ class MediaPanelViewModel {
             newPlayer?.play()
         }
 
-        // Load video size
+        // Time observer for seek bar
+        videoCurrentTime = 0
+        videoDuration = 0
+        let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+        timeObserver = newPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            Task { @MainActor in
+                guard let self, !self.isSeeking else { return }
+                self.videoCurrentTime = time.seconds
+                if let duration = self.player?.currentItem?.duration, duration.isNumeric {
+                    self.videoDuration = duration.seconds
+                }
+            }
+        }
+
+        // Set player AFTER observers are configured
+        self.player = newPlayer
+
+        // Immediately signal entity creation with default 16:9 size
+        videoVersion += 1
+
+        // Then update size asynchronously and recreate with correct aspect ratio
         Task {
             await loadVideoSize(from: item)
             videoVersion += 1
         }
+    }
+
+    private func cleanupPlayer() {
+        // Remove time observer from OLD player
+        if let obs = timeObserver, let oldPlayer = player {
+            oldPlayer.removeTimeObserver(obs)
+        }
+        timeObserver = nil
+
+        // Remove loop observer
+        if let obs = loopObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
+        loopObserver = nil
+
+        // Stop old player
+        player?.pause()
+        player = nil
+        isVideoPlaying = false
     }
 
     func playVideo() {
@@ -89,6 +133,12 @@ class MediaPanelViewModel {
         player?.pause()
         player?.seek(to: .zero)
         isVideoPlaying = false
+        videoCurrentTime = 0
+    }
+
+    func seekVideo(to seconds: Double) {
+        let time = CMTime(seconds: seconds, preferredTimescale: 600)
+        player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
     private func loadVideoSize(from item: AVPlayerItem) async {
@@ -100,6 +150,7 @@ class MediaPanelViewModel {
             let transformed = naturalSize.applying(transform)
             let w = abs(transformed.width)
             let h = abs(transformed.height)
+            guard w > 0, h > 0 else { return }
             let maxDim: CGFloat = 2.0
             let scale = min(maxDim / w, maxDim / h)
             videoSize = CGSize(width: w * scale, height: h * scale)
@@ -121,10 +172,11 @@ class MediaPanelViewModel {
         }
 
         slideshowFolderURL = url
-        slideshowImages = SlideshowEngine.loadImageList(from: url)
-        slideshowCurrentIndex = 0
 
-        if !slideshowImages.isEmpty {
+        let images = SlideshowEngine.loadImageList(from: url)
+        slideshowImages = images
+        slideshowCurrentIndex = 0
+        if !images.isEmpty {
             loadCurrentSlideshowImage()
         }
     }
@@ -138,6 +190,13 @@ class MediaPanelViewModel {
     func slideshowPrev() {
         guard !slideshowImages.isEmpty else { return }
         slideshowCurrentIndex = (slideshowCurrentIndex - 1 + slideshowImages.count) % slideshowImages.count
+        loadCurrentSlideshowImage()
+    }
+
+    func slideshowJump(by offset: Int) {
+        guard !slideshowImages.isEmpty else { return }
+        let count = slideshowImages.count
+        slideshowCurrentIndex = ((slideshowCurrentIndex + offset) % count + count) % count
         loadCurrentSlideshowImage()
     }
 
@@ -162,16 +221,28 @@ class MediaPanelViewModel {
         guard slideshowCurrentIndex < slideshowImages.count else { return }
         let image = slideshowImages[slideshowCurrentIndex]
 
-        Task {
+        // Cancel previous load if still in progress
+        slideshowLoadTask?.cancel()
+
+        slideshowLoadTask = Task {
             do {
                 let textures = try await SlideshowEngine.loadTextures(for: image)
+
+                guard !Task.isCancelled else { return }
+
+                // Release old textures before assigning new ones
+                slideshowTexture = nil
+                slideshowRightTexture = nil
+
                 slideshowTexture = textures.leftTexture
                 slideshowRightTexture = textures.rightTexture
                 slideshowIsStereo = textures.isStereo
                 slideshowDisplaySize = textures.displaySize
                 slideshowTextureVersion += 1
             } catch {
-                print("Failed to load slideshow image: \(error)")
+                if !Task.isCancelled {
+                    print("Failed to load slideshow image: \(error)")
+                }
             }
         }
     }

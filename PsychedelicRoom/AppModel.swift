@@ -7,6 +7,7 @@ class AppModel {
     var speed: Float = 1.0
     var intensity: Float = 1.0
     var patternStyle: PatternStyle = .psychedelic
+    var opacity: Float = 0.75  // 0.0...1.0
     var particlesEnabled: Bool = true
     var audioReactiveEnabled: Bool = false
     var audioSensitivity: Float = 1.0  // 0.1...3.0
@@ -38,6 +39,11 @@ class AppModel {
         case aurora = "Aurora"
         case voronoi = "Voronoi"
         case interference = "Interference"
+        case hexTunnel = "Hex Tunnel"
+        case organic = "Organic"
+        case sparkles = "Sparkles"
+        case hearts = "Hearts"
+        case caustic = "Caustic"
 
         var id: String { rawValue }
     }

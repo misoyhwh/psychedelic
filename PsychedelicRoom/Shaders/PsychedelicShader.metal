@@ -333,6 +333,168 @@ float4 interferencePattern(float2 uv, float t, float intensity) {
     return float4(clamp(color, 0.0, 1.0), 0.8);
 }
 
+// ============================================================
+// GLSL-compatible mod (handles negatives like GLSL)
+// ============================================================
+float glsl_mod(float x, float y) {
+    return x - y * floor(x / y);
+}
+
+// ============================================================
+// Hex Tunnel — raymarched hexagonal tunnel (Renard_VRC)
+// ============================================================
+float4 hexTunnelPattern(float2 uv, float t, float intensity) {
+    float2 FC = float2(uv.x * 256.0, uv.y * 256.0);
+    float2 r = float2(256.0, 256.0);
+    float4 o = float4(0.0);
+
+    for (float i = 0.0; i < 99.0; i += 1.0) {
+        float l = 1.0;
+        float d = 0.0;
+        float z = 0.0;
+
+        // Accumulate ray
+        float3 P = float3((FC.xy - r * 0.5) / r.y, 0.5) * l;
+        z = P.z + t * 5.0 * intensity;
+        P.z = fract(z) - 0.5;
+        float angle = atan2(P.y, P.x);
+        P.x = cos(glsl_mod(angle + z * 0.2, M_PI_F / 3.0) - M_PI_F / 6.0) * length(P.xy) - 2.0;
+        d = max(abs(length(float2(P.x, P.z)) - 0.2), 0.01);
+        l += d;
+
+        // Re-march with accumulated length
+        for (float j = 1.0; j < 99.0; j += 1.0) {
+            P = float3((FC.xy - r * 0.5) / r.y, 0.5) * l;
+            z = P.z + t * 5.0 * intensity;
+            P.z = fract(z) - 0.5;
+            angle = atan2(P.y, P.x);
+            P.x = cos(glsl_mod(angle + z * 0.2, M_PI_F / 3.0) - M_PI_F / 6.0) * length(P.xy) - 2.0;
+            d = max(abs(length(float2(P.x, P.z)) - 0.2), 0.01);
+            l += d;
+            o += exp(-d * 5.0) * 0.01 * (0.9 + 0.7 * float4(cos(z), cos(z + 0.2), cos(z + 0.3), 0.0));
+        }
+        break; // Single pass with inner loop
+    }
+
+    o.w = 0.8;
+    return clamp(o, 0.0, 1.0);
+}
+
+// ============================================================
+// Organic Structure — raymarched organic/coral (XorDev)
+// ============================================================
+float4 organicPattern(float2 uv, float t, float intensity) {
+    float2 FC = float2(uv.x * 256.0, uv.y * 256.0);
+    float2 r = float2(256.0, 256.0);
+    float4 o = float4(0.0);
+
+    for (float i = 0.0; i < 40.0; i += 1.0) {
+        float z = 0.0;
+        float d = 0.0;
+        float3 p = z * normalize(float3(FC.x * 2.0 - r.x, FC.y * 2.0 - r.y, -r.y));
+        p.z -= t * intensity;
+        z += d;
+        float3 v = cos(p) + cos(float3(p.y, p.z, p.x) * 0.2);
+        d = length(max(v, -v / 7.0));
+        z += d;
+
+        // Iterate
+        for (float j = 1.0; j < 40.0; j += 1.0) {
+            p = z * normalize(float3(FC.x * 2.0 - r.x, FC.y * 2.0 - r.y, -r.y));
+            p.z -= t * intensity;
+            v = cos(p) + cos(float3(p.y, p.z, p.x) * 0.2);
+            d = length(max(v, -v / 7.0));
+            z += d;
+            o += (sin(z + float4(0.0, 1.0, 3.0, 3.0)) + 1.0) / d;
+        }
+        break;
+    }
+
+    o = tanh(o / 1000.0);
+    o.w = 0.8;
+    return clamp(o, 0.0, 1.0);
+}
+
+// ============================================================
+// Sparkles — sparkling particle effect (XorDev)
+// ============================================================
+float4 sparklesPattern(float2 uv, float t, float intensity) {
+    float2 FC = float2(uv.x * 256.0, uv.y * 256.0);
+    float2 r = float2(256.0, 256.0);
+    float4 o = float4(0.0);
+
+    float tScaled = t * intensity;
+    for (float i = -fract(tScaled / 0.1); i < 100.0; i += 1.0) {
+        float j = round(i + tScaled / 0.1);
+        float jj = j * j;
+        float4 col = (cos(jj + float4(0.0, 1.0, 2.0, 3.0)) + 1.0);
+        float brightness = exp(cos(jj / 0.1) / 0.6);
+        float fade = min(1000.0 - i / 0.1 + 9.0, i) / 50000.0;
+        float2 center = (FC.xy - r * 0.5) / r.y + 0.05 * cos(jj / float2(4.0, 4.0) + float2(0.0, 5.0)) * sqrt(i);
+        float dist = length(center);
+        o += col * brightness * fade / max(dist, 0.001);
+    }
+
+    o = tanh(o * o);
+    o.w = 0.8;
+    return clamp(o, 0.0, 1.0);
+}
+
+// ============================================================
+// Hearts — floating hearts with pink glow
+// ============================================================
+float4 heartsPattern(float2 uv, float t, float intensity) {
+    float2 r = float2(256.0, 256.0);
+    float2 FC = float2(uv.x * 256.0, uv.y * 256.0);
+    float2 p = (FC.xy * 2.0 - r) / r.x * 3.0;
+    p.y = -p.y; // Flip Y so hearts point upward
+
+    float v = 0.1;
+    for (float i = 0.0; i < 11.0; i += 1.0) {
+        float2 c = sin(float2(i, i * 1.4) + t * 0.5 * intensity);
+        float2 q = (p - c) * 0.9;
+        q.y -= sqrt(abs(q.x)) * 0.5;
+        float d = length(q) - 0.3 + sin(q.x * 5.0 + t) * 0.05;
+        v += 0.015 / abs(d);
+    }
+
+    return float4(float3(1.0, 0.15, 0.4) * v, 0.8);
+}
+
+// ============================================================
+// Caustic Fractal — water caustics with palette
+// ============================================================
+float3 causticPalette(float val, float3 a, float3 b, float3 c, float3 d) {
+    return a + b * cos(6.28318 * (c * val + d));
+}
+
+float4 causticPattern(float2 uv, float t, float intensity) {
+    float2 p = (uv - 0.5) * 4.0;
+    float2 p0 = p;
+
+    float3 finalColor = float3(0.0);
+    for (float i = 0.0; i < 4.0; i += 1.0) {
+        p = fract(p * 1.5) - 0.5;
+
+        float d = length(p) * exp(-length(p0));
+        float3 col = causticPalette(
+            length(p0) + i * 0.4 + t * 0.4 * intensity,
+            float3(0.5, 0.5, 0.5),
+            float3(0.5, 0.5, 0.5),
+            float3(1.0, 1.0, 1.0),
+            float3(0.263, 0.416, 0.557)
+        );
+
+        d = sin(d * 8.0 + t * intensity) / 8.0;
+        d = abs(d);
+        d = pow(0.01 / d, 1.2);
+
+        finalColor += col * d;
+    }
+
+    return float4(clamp(finalColor, 0.0, 1.0), 0.8);
+}
+
 kernel void generatePsychedelicTexture(
     texture2d<half, access::write> output [[texture(0)]],
     constant PsychedelicParams& params [[buffer(0)]],
@@ -354,6 +516,11 @@ kernel void generatePsychedelicTexture(
         case 4: color = auroraPattern(uv, t, params.intensity); break;
         case 5: color = voronoiPattern(uv, t, params.intensity); break;
         case 6: color = interferencePattern(uv, t, params.intensity); break;
+        case 7: color = hexTunnelPattern(uv, t, params.intensity); break;
+        case 8: color = organicPattern(uv, t, params.intensity); break;
+        case 9: color = sparklesPattern(uv, t, params.intensity); break;
+        case 10: color = heartsPattern(uv, t, params.intensity); break;
+        case 11: color = causticPattern(uv, t, params.intensity); break;
         default: color = psychedelicPattern(uv, t, params.intensity); break;
     }
 

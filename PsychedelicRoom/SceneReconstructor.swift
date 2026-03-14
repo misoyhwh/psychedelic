@@ -19,6 +19,7 @@ class SceneReconstructor {
     private var particleSystem = ParticleSystem()
     private var frameCount: Int = 0
     private var particlesEnabled: Bool = true
+    private var opacity: Float = 0.75
     private var audioReactiveEnabled: Bool = false
     private var audioSensitivity: Float = 1.0
     private var audioEngine: AudioReactiveEngine?
@@ -84,12 +85,13 @@ class SceneReconstructor {
     }
 
     func updateParameters(speed: Float, intensity: Float, style: AppModel.PatternStyle,
-                          particlesEnabled: Bool, audioReactiveEnabled: Bool,
+                          opacity: Float, particlesEnabled: Bool, audioReactiveEnabled: Bool,
                           audioSensitivity: Float, autoPulseEnabled: Bool,
                           classificationFilter: Set<MeshAnchor.MeshClassification>?) {
         self.speed = speed
         self.intensity = intensity
         self.style = style
+        self.opacity = opacity
         self.particlesEnabled = particlesEnabled
         self.audioReactiveEnabled = audioReactiveEnabled
         self.audioSensitivity = audioSensitivity
@@ -220,14 +222,19 @@ class SceneReconstructor {
         case .aurora: return 4
         case .voronoi: return 5
         case .interference: return 6
+        case .hexTunnel: return 7
+        case .organic: return 8
+        case .sparkles: return 9
+        case .hearts: return 10
+        case .caustic: return 11
         }
     }
 
     private var cachedMaterial: UnlitMaterial?
-    private var lastOpacity: Float = -1
+    private var lastCachedOpacity: Float = -1
 
     private func getOrCreateMaterial() -> UnlitMaterial {
-        if let cachedMaterial, !audioReactiveEnabled {
+        if let cachedMaterial, !audioReactiveEnabled, lastCachedOpacity == opacity {
             return cachedMaterial
         }
         var material = UnlitMaterial()
@@ -237,17 +244,18 @@ class SceneReconstructor {
             material.color = .init(tint: .init(red: 1, green: 0, blue: 1, alpha: 0.8))
         }
 
-        // Audio-reactive opacity: base 0.3, boosted by bass * sensitivity
-        let opacity: Float
+        // Audio-reactive opacity: base from slider, boosted by bass * sensitivity
+        let effectiveOpacity: Float
         if audioReactiveEnabled {
-            opacity = min(0.3 + bassLevel * 0.65 * audioSensitivity, 1.0)
+            effectiveOpacity = min(opacity * 0.4 + bassLevel * 0.65 * audioSensitivity, 1.0)
         } else {
-            opacity = 0.75
+            effectiveOpacity = opacity
         }
-        material.blending = .transparent(opacity: .init(floatLiteral: Float(opacity)))
+        material.blending = .transparent(opacity: .init(floatLiteral: Float(effectiveOpacity)))
 
         if !audioReactiveEnabled {
             cachedMaterial = material
+            lastCachedOpacity = opacity
         }
         return material
     }
@@ -294,9 +302,10 @@ class SceneReconstructor {
             styleIndex: styleIndex
         )
 
+        let needsFullUpdate = audioReactiveEnabled || lastCachedOpacity != opacity
         let material = getOrCreateMaterial()
-        if audioReactiveEnabled {
-            // When audio-reactive, update all entities with new opacity every frame
+        if needsFullUpdate {
+            // Update all entities when opacity or audio changes
             for entity in meshEntities.values {
                 entity.model?.materials = [material]
             }
