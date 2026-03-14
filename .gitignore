@@ -10,5 +10,9 @@ DerivedData/
 *.swp
 *~
 
+# Swift Package Manager
+.build/
+Packages/*/.build/
+
 # Claude Code
 .claude/
