@@ -1,11 +1,16 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(AudioReactiveEngine.self) private var audioEngine
+    @Environment(MediaPanelViewModel.self) private var mediaVM
     @Environment(\.openImmersiveSpace) var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) var dismissImmersiveSpace
     @Environment(\.openWindow) var openWindow
+
+    @State private var showVideoFilePicker = false
+    @State private var showSlideshowFolderPicker = false
 
     var body: some View {
         @Bindable var appModel = appModel
@@ -62,12 +67,10 @@ struct ContentView: View {
                     }
 
                 if appModel.audioReactiveEnabled {
-                    // Auto Pulse toggle (for when mic can't capture device audio)
                     Toggle("Auto Pulse (BPMモード)", isOn: $appModel.autoPulseEnabled)
                         .toggleStyle(.switch)
                         .onChange(of: appModel.autoPulseEnabled) { _, enabled in
                             audioEngine.autoPulseEnabled = enabled
-                            // Restart engine with new mode
                             audioEngine.stop()
                             Task {
                                 audioEngine.start()
@@ -101,22 +104,23 @@ struct ContentView: View {
                 }
             }
 
-            // Browser & Video buttons
-            HStack(spacing: 12) {
-                Button {
-                    openWindow(id: "BrowserWindow")
-                } label: {
-                    Label("Browser", systemImage: "globe")
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    openWindow(id: "VideoPlayerWindow")
-                } label: {
-                    Label("Video Player", systemImage: "film")
-                }
-                .buttonStyle(.bordered)
+            // Browser button
+            Button {
+                openWindow(id: "BrowserWindow")
+            } label: {
+                Label("Browser", systemImage: "globe")
             }
+            .buttonStyle(.bordered)
+
+            Divider()
+
+            // MARK: - Video Panel Section
+            videoPanelSection
+
+            Divider()
+
+            // MARK: - Slideshow Panel Section
+            slideshowPanelSection
 
             Divider()
 
@@ -209,6 +213,192 @@ struct ContentView: View {
         .padding(40)
         .frame(width: 500)
         } // ScrollView
+    }
+
+    // MARK: - Video Panel Controls
+
+    @MainActor
+    private var videoPanelSection: some View {
+        VStack(spacing: 12) {
+            Toggle("Video Panel", isOn: Binding(
+                get: { mediaVM.videoEnabled },
+                set: { mediaVM.videoEnabled = $0 }
+            ))
+            .toggleStyle(.switch)
+
+            if mediaVM.videoEnabled {
+                Text("Immersive空間に枠なし動画パネルを配置")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                // File picker button
+                Button {
+                    showVideoFilePicker = true
+                } label: {
+                    Label(mediaVM.videoURL != nil ? mediaVM.videoURL!.lastPathComponent : "動画ファイルを選択",
+                          systemImage: "folder")
+                }
+                .buttonStyle(.bordered)
+                .fileImporter(
+                    isPresented: $showVideoFilePicker,
+                    allowedContentTypes: [.movie, .video, .mpeg4Movie, .quickTimeMovie],
+                    allowsMultipleSelection: false
+                ) { result in
+                    if case .success(let urls) = result, let url = urls.first {
+                        mediaVM.loadVideo(url: url)
+                        mediaVM.playVideo()
+                    }
+                }
+
+                if mediaVM.player != nil {
+                    // Playback controls
+                    HStack(spacing: 16) {
+                        Button {
+                            if mediaVM.isVideoPlaying {
+                                mediaVM.pauseVideo()
+                            } else {
+                                mediaVM.playVideo()
+                            }
+                        } label: {
+                            Image(systemName: mediaVM.isVideoPlaying ? "pause.fill" : "play.fill")
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button {
+                            mediaVM.stopVideo()
+                        } label: {
+                            Image(systemName: "stop.fill")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    // Rotation controls
+                    VStack(alignment: .leading) {
+                        Text("水平回転: \(Int(mediaVM.videoRotationH))°")
+                        Slider(value: Binding(
+                            get: { mediaVM.videoRotationH },
+                            set: { mediaVM.videoRotationH = $0 }
+                        ), in: -180...180, step: 5)
+                    }
+
+                    VStack(alignment: .leading) {
+                        Text("垂直回転: \(Int(mediaVM.videoRotationV))°")
+                        Slider(value: Binding(
+                            get: { mediaVM.videoRotationV },
+                            set: { mediaVM.videoRotationV = $0 }
+                        ), in: -90...90, step: 5)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Slideshow Panel Controls
+
+    @MainActor
+    private var slideshowPanelSection: some View {
+        VStack(spacing: 12) {
+            Toggle("Slideshow Panel", isOn: Binding(
+                get: { mediaVM.slideshowEnabled },
+                set: { mediaVM.slideshowEnabled = $0 }
+            ))
+            .toggleStyle(.switch)
+
+            if mediaVM.slideshowEnabled {
+                Text("立体視対応スライドショーパネル")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                // Folder picker button
+                Button {
+                    showSlideshowFolderPicker = true
+                } label: {
+                    Label(mediaVM.slideshowFolderURL != nil ? mediaVM.slideshowFolderURL!.lastPathComponent : "画像フォルダを選択",
+                          systemImage: "folder")
+                }
+                .buttonStyle(.bordered)
+                .fileImporter(
+                    isPresented: $showSlideshowFolderPicker,
+                    allowedContentTypes: [.folder],
+                    allowsMultipleSelection: false
+                ) { result in
+                    if case .success(let urls) = result, let url = urls.first {
+                        mediaVM.loadSlideshowFolder(url: url)
+                    }
+                }
+
+                if !mediaVM.slideshowImages.isEmpty {
+                    Text("\(mediaVM.slideshowCurrentIndex + 1) / \(mediaVM.slideshowImages.count) 枚")
+                        .font(.caption)
+
+                    if mediaVM.slideshowIsStereo {
+                        Label("立体視 (Stereo)", systemImage: "eye.trianglebadge.exclamationmark")
+                            .font(.caption)
+                            .foregroundStyle(.blue)
+                    }
+
+                    // Navigation controls
+                    HStack(spacing: 16) {
+                        Button {
+                            mediaVM.slideshowPrev()
+                        } label: {
+                            Image(systemName: "backward.fill")
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button {
+                            if mediaVM.slideshowIsPlaying {
+                                mediaVM.stopSlideshow()
+                            } else {
+                                mediaVM.startSlideshow()
+                            }
+                        } label: {
+                            Image(systemName: mediaVM.slideshowIsPlaying ? "pause.fill" : "play.fill")
+                        }
+                        .buttonStyle(.bordered)
+
+                        Button {
+                            mediaVM.slideshowNext()
+                        } label: {
+                            Image(systemName: "forward.fill")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    // Interval control
+                    VStack(alignment: .leading) {
+                        Text("間隔: \(mediaVM.slideshowInterval, specifier: "%.0f")秒")
+                        Slider(value: Binding(
+                            get: { mediaVM.slideshowInterval },
+                            set: {
+                                mediaVM.slideshowInterval = $0
+                                if mediaVM.slideshowIsPlaying {
+                                    mediaVM.stopSlideshow()
+                                    mediaVM.startSlideshow()
+                                }
+                            }
+                        ), in: 1...30, step: 1)
+                    }
+
+                    // Rotation controls
+                    VStack(alignment: .leading) {
+                        Text("水平回転: \(Int(mediaVM.slideshowRotationH))°")
+                        Slider(value: Binding(
+                            get: { mediaVM.slideshowRotationH },
+                            set: { mediaVM.slideshowRotationH = $0 }
+                        ), in: -180...180, step: 5)
+                    }
+
+                    VStack(alignment: .leading) {
+                        Text("垂直回転: \(Int(mediaVM.slideshowRotationV))°")
+                        Slider(value: Binding(
+                            get: { mediaVM.slideshowRotationV },
+                            set: { mediaVM.slideshowRotationV = $0 }
+                        ), in: -90...90, step: 5)
+                    }
+                }
+            }
+        }
     }
 }
 

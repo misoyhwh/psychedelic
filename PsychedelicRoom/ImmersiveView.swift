@@ -1,20 +1,42 @@
 import SwiftUI
 import RealityKit
 @preconcurrency import ARKit
+import RealityKitContent
 
 struct ImmersiveView: View {
     @Environment(AppModel.self) private var appModel
     @Environment(AudioReactiveEngine.self) private var audioEngine
+    @Environment(MediaPanelViewModel.self) private var mediaVM
     @State private var sceneReconstructor = SceneReconstructor()
     @State private var occlusionPanel = OcclusionPanelManager()
+
+    // Video panel entities
+    @State private var videoRootEntity = Entity()
+    @State private var videoEntity: ModelEntity?
+
+    // Slideshow panel entities
+    @State private var slideshowRootEntity = Entity()
+    @State private var slideshowEntity: ModelEntity?
 
     var body: some View {
         RealityView { content in
             sceneReconstructor.configure(audioEngine: audioEngine)
             content.add(sceneReconstructor.rootEntity)
             content.add(occlusionPanel.rootEntity)
+
+            // Video panel root
+            videoRootEntity.position = SIMD3<Float>(0, 1.5, -2.0)
+            videoRootEntity.isEnabled = false
+            content.add(videoRootEntity)
+
+            // Slideshow panel root
+            slideshowRootEntity.position = SIMD3<Float>(1.8, 1.5, -2.0)
+            slideshowRootEntity.isEnabled = false
+            content.add(slideshowRootEntity)
+
             await sceneReconstructor.start()
         } update: { content in
+            // Psychedelic parameters
             let filter: Set<MeshAnchor.MeshClassification>?
             if appModel.meshClassificationFilterEnabled {
                 var f: Set<MeshAnchor.MeshClassification> = []
@@ -47,20 +69,134 @@ struct ImmersiveView: View {
                 height: appModel.occlusionPanelHeight,
                 rotationDegrees: appModel.occlusionPanelRotation
             )
+
+            // Video panel enabled/disabled
+            videoRootEntity.isEnabled = mediaVM.videoEnabled && mediaVM.player != nil
+
+            // Video rotation
+            let videoYaw = simd_quatf(angle: mediaVM.videoRotationH * .pi / 180, axis: [0, 1, 0])
+            let videoPitch = simd_quatf(angle: mediaVM.videoRotationV * .pi / 180, axis: [1, 0, 0])
+            videoRootEntity.orientation = videoYaw * videoPitch
+
+            // Slideshow panel enabled/disabled
+            slideshowRootEntity.isEnabled = mediaVM.slideshowEnabled && mediaVM.slideshowTexture != nil
+
+            // Slideshow rotation
+            let ssYaw = simd_quatf(angle: mediaVM.slideshowRotationH * .pi / 180, axis: [0, 1, 0])
+            let ssPitch = simd_quatf(angle: mediaVM.slideshowRotationV * .pi / 180, axis: [1, 0, 0])
+            slideshowRootEntity.orientation = ssYaw * ssPitch
         }
-        .gesture(dragGesture)
+        .gesture(occlusionDragGesture)
+        .gesture(panelDragGesture)
         .task {
             await sceneReconstructor.processUpdates()
         }
+        .onChange(of: mediaVM.videoVersion) {
+            recreateVideoEntity()
+        }
+        .onChange(of: mediaVM.slideshowTextureVersion) {
+            recreateSlideshowEntity()
+        }
     }
 
-    var dragGesture: some Gesture {
+    // MARK: - Video Entity
+
+    private func recreateVideoEntity() {
+        // Remove old
+        videoEntity?.removeFromParent()
+        videoEntity = nil
+
+        guard let player = mediaVM.player else { return }
+
+        let width = Float(mediaVM.videoSize.width)
+        let height = Float(mediaVM.videoSize.height)
+
+        let mesh = MeshResource.generatePlane(width: width, height: height)
+        let material = VideoMaterial(avPlayer: player)
+        let entity = ModelEntity(mesh: mesh, materials: [material])
+
+        entity.components.set(CollisionComponent(shapes: [.generateBox(width: width, height: height, depth: 0.01)]))
+        entity.components.set(InputTargetComponent(allowedInputTypes: .all))
+        entity.name = "videoPanel"
+
+        videoRootEntity.addChild(entity)
+        videoEntity = entity
+    }
+
+    // MARK: - Slideshow Entity
+
+    private func recreateSlideshowEntity() {
+        slideshowEntity?.removeFromParent()
+        slideshowEntity = nil
+
+        guard let leftTexture = mediaVM.slideshowTexture else { return }
+
+        let width = Float(mediaVM.slideshowDisplaySize.width)
+        let height = Float(mediaVM.slideshowDisplaySize.height)
+        let mesh = MeshResource.generatePlane(width: width, height: height)
+
+        var material: RealityKit.Material
+
+        if mediaVM.slideshowIsStereo, let rightTexture = mediaVM.slideshowRightTexture {
+            // Stereo: use ShaderGraph material with CameraIndexSwitch
+            do {
+                var stereoMaterial = try ShaderGraphMaterial(
+                    named: "/Root/StereoImageMaterial",
+                    from: "StereoImageMaterial",
+                    in: realityKitContentBundle
+                )
+                try stereoMaterial.setParameter(name: "LeftImage", value: .textureResource(leftTexture))
+                try stereoMaterial.setParameter(name: "RightImage", value: .textureResource(rightTexture))
+                material = stereoMaterial
+            } catch {
+                print("Failed to load stereo material: \(error)")
+                var fallback = UnlitMaterial()
+                fallback.color = .init(tint: .white, texture: .init(leftTexture))
+                material = fallback
+            }
+        } else {
+            // Mono: use UnlitMaterial
+            var monoMaterial = UnlitMaterial()
+            monoMaterial.color = .init(tint: .white, texture: .init(leftTexture))
+            material = monoMaterial
+        }
+
+        let entity = ModelEntity(mesh: mesh, materials: [material])
+        entity.components.set(CollisionComponent(shapes: [.generateBox(width: width, height: height, depth: 0.01)]))
+        entity.components.set(InputTargetComponent(allowedInputTypes: .all))
+        entity.name = "slideshowPanel"
+
+        slideshowRootEntity.addChild(entity)
+        slideshowEntity = entity
+    }
+
+    // MARK: - Gestures
+
+    var occlusionDragGesture: some Gesture {
         DragGesture()
             .targetedToEntity(occlusionPanel.panelEntity)
             .onChanged { value in
-                // Convert the 3D drag location to scene coordinates
                 let pos = value.convert(value.location3D, from: .local, to: occlusionPanel.rootEntity)
                 occlusionPanel.panelEntity.position = pos
+            }
+    }
+
+    var panelDragGesture: some Gesture {
+        DragGesture()
+            .targetedToAnyEntity()
+            .onChanged { value in
+                guard let entity = value.entity as? ModelEntity,
+                      (entity.name == "videoPanel" || entity.name == "slideshowPanel"),
+                      let root = entity.parent else { return }
+
+                let translation = value.translation3D
+                let deltaX = Float(translation.x) * 0.00005
+                let deltaY = Float(-translation.y) * 0.00005
+                let deltaZ = Float(translation.z) * 0.00005
+
+                root.position.x += deltaX
+                root.position.y += deltaY
+                root.position.z += deltaZ
             }
     }
 }

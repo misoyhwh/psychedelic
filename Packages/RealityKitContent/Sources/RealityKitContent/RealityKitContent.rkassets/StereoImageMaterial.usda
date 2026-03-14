@@ -1,0 +1,56 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+def Xform "Root"
+{
+    def Material "StereoImageMaterial"
+    {
+        asset inputs:LeftImage = @@
+        asset inputs:RightImage = @@
+        token outputs:mtlx:surface.connect = </Root/StereoImageMaterial/UnlitSurface.outputs:out>
+        token outputs:realitykit:vertex
+
+        def Shader "UnlitSurface"
+        {
+            uniform token info:id = "ND_realitykit_unlit_surfaceshader"
+            bool inputs:applyPostProcessToneMap = 0
+            color3f inputs:color.connect = </Root/StereoImageMaterial/CameraIndexSwitch.outputs:out>
+            bool inputs:hasPremultipliedAlpha = false
+            float inputs:opacity = 1.0
+            token outputs:out
+        }
+
+        def Shader "CameraIndexSwitch"
+        {
+            uniform token info:id = "ND_realitykit_geometry_switch_cameraindex_color3"
+            color3f inputs:mono.connect = </Root/StereoImageMaterial/LeftImageNode.outputs:out>
+            color3f inputs:left.connect = </Root/StereoImageMaterial/LeftImageNode.outputs:out>
+            color3f inputs:right.connect = </Root/StereoImageMaterial/RightImageNode.outputs:out>
+            color3f outputs:out
+        }
+
+        def Shader "LeftImageNode"
+        {
+            uniform token info:id = "ND_image_color3"
+            color3f inputs:default
+            asset inputs:file = @left.png@
+            asset inputs:file.connect = </Root/StereoImageMaterial.inputs:LeftImage>
+            string inputs:filtertype = "linear"
+            color3f outputs:out
+        }
+
+        def Shader "RightImageNode"
+        {
+            uniform token info:id = "ND_image_color3"
+            color3f inputs:default
+            asset inputs:file = @right.png@
+            asset inputs:file.connect = </Root/StereoImageMaterial.inputs:RightImage>
+            string inputs:filtertype = "linear"
+            color3f outputs:out
+        }
+    }
+}
