@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Audio input is used to make visual effects react to music and sounds.</string>
+	<key>NSWorldSensingUsageDescription</key>
+	<string>This app uses scene reconstruction to overlay psychedelic patterns on room surfaces.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationPreferredDefaultSceneSessionRole</key>
+		<string>UIWindowSceneSessionRoleApplication</string>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+		<key>UISceneConfigurations</key>
+		<dict/>
+	</dict>
+</dict>
+</plist>
