@@ -130,6 +130,11 @@ struct ContentView: View {
 
             Divider()
 
+            // MARK: - Color Mode Section
+            colorModeSection
+
+            Divider()
+
             // Occlusion panel section
             VStack(spacing: 12) {
                 Toggle("Occlusion Panel", isOn: $appModel.occlusionPanelEnabled)
@@ -320,6 +325,7 @@ struct ContentView: View {
                             set: { mediaVM.videoRotationV = $0 }
                         ), in: -90...90, step: 5)
                     }
+
                 }
             }
         }
@@ -447,6 +453,59 @@ struct ContentView: View {
                             get: { mediaVM.slideshowRotationV },
                             set: { mediaVM.slideshowRotationV = $0 }
                         ), in: -90...90, step: 5)
+                    }
+                }
+            }
+        }
+    }
+    // MARK: - Color Mode Controls
+
+    @MainActor
+    private var colorModeSection: some View {
+        VStack(spacing: 12) {
+            Toggle("Video Color Mode", isOn: Binding(
+                get: { appModel.videoColorMode },
+                set: { appModel.videoColorMode = $0 }
+            ))
+            .toggleStyle(.switch)
+
+            if appModel.videoColorMode {
+                Text("パネルの端の色を部屋に反映します")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("Color Source", selection: Binding(
+                    get: { appModel.colorSource },
+                    set: { appModel.colorSource = $0 }
+                )) {
+                    ForEach(AppModel.ColorSource.allCases) { source in
+                        Text(source.rawValue).tag(source)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                HStack(spacing: 8) {
+                    let top = appModel.colorSource == .slideshow ? mediaVM.slideshowColorTop : mediaVM.videoColorTop
+                    let mid = appModel.colorSource == .slideshow ? mediaVM.slideshowColorMiddle : mediaVM.videoColorMiddle
+                    let bot = appModel.colorSource == .slideshow ? mediaVM.slideshowColorBottom : mediaVM.videoColorBottom
+
+                    VStack(spacing: 2) {
+                        Circle().fill(Color(
+                            red: Double(top.x), green: Double(top.y), blue: Double(top.z)
+                        )).frame(width: 20, height: 20)
+                        Text("天井").font(.caption2)
+                    }
+                    VStack(spacing: 2) {
+                        Circle().fill(Color(
+                            red: Double(mid.x), green: Double(mid.y), blue: Double(mid.z)
+                        )).frame(width: 20, height: 20)
+                        Text("壁").font(.caption2)
+                    }
+                    VStack(spacing: 2) {
+                        Circle().fill(Color(
+                            red: Double(bot.x), green: Double(bot.y), blue: Double(bot.z)
+                        )).frame(width: 20, height: 20)
+                        Text("床").font(.caption2)
                     }
                 }
             }

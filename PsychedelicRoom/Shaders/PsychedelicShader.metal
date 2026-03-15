@@ -495,6 +495,117 @@ float4 causticPattern(float2 uv, float t, float intensity) {
     return float4(clamp(finalColor, 0.0, 1.0), 0.8);
 }
 
+// ============================================================
+// Video Psychedelic — luminance pattern for video color tinting
+// ============================================================
+float4 videoPsychedelicPattern(float2 uv, float t, float intensity) {
+    float2 p = uv * 4.0 * intensity;
+
+    float n1 = fbm(p + float2(t * 0.3, t * 0.2));
+    float n2 = fbm(p * 1.5 + float2(-t * 0.2, t * 0.4) + n1 * 2.0);
+    float n3 = fbm(p * 0.8 + float2(t * 0.1, -t * 0.3) + n2 * 2.0);
+
+    float wave1 = sin(p.x * 3.0 + n1 * 6.0 + t) * 0.5 + 0.5;
+    float wave2 = sin(p.y * 4.0 + n2 * 5.0 - t * 0.7) * 0.5 + 0.5;
+    float wave3 = cos((p.x + p.y) * 2.5 + n3 * 4.0 + t * 1.3) * 0.5 + 0.5;
+
+    float lum = (wave1 + wave2 + wave3) / 3.0;
+    lum = pow(lum, 0.7); // Boost contrast slightly
+    lum = clamp(lum, 0.0, 1.0);
+
+    return float4(lum, lum, lum, 0.8);
+}
+
+// ============================================================
+// Video Interference — luminance pattern for video color tinting
+// ============================================================
+float4 videoInterferencePattern(float2 uv, float t, float intensity) {
+    float2 src1 = float2(0.3 + sin(t * 0.2) * 0.2, 0.3 + cos(t * 0.15) * 0.2);
+    float2 src2 = float2(0.7 + cos(t * 0.25) * 0.2, 0.6 + sin(t * 0.18) * 0.2);
+    float2 src3 = float2(0.5 + sin(t * 0.3 + 2.0) * 0.25, 0.2 + cos(t * 0.22 + 1.0) * 0.15);
+    float2 src4 = float2(0.2 + cos(t * 0.17 + 3.0) * 0.15, 0.8 + sin(t * 0.28 + 2.0) * 0.15);
+
+    float freq = 20.0 * intensity;
+    float speed = t * 3.0;
+
+    float d1 = length(uv - src1);
+    float d2 = length(uv - src2);
+    float d3 = length(uv - src3);
+    float d4 = length(uv - src4);
+
+    float w1 = sin(d1 * freq - speed) / (1.0 + d1 * 4.0);
+    float w2 = sin(d2 * freq - speed * 1.1 + 1.0) / (1.0 + d2 * 4.0);
+    float w3 = sin(d3 * freq * 0.8 - speed * 0.9 + 2.0) / (1.0 + d3 * 5.0);
+    float w4 = sin(d4 * freq * 1.2 - speed * 1.2 + 3.0) / (1.0 + d4 * 3.0);
+
+    float combined = (w1 + w2 + w3 + w4);
+    float brightness = combined * 0.5 + 0.5;
+    float peak = pow(max(0.0, combined * 0.5 + 0.3), 4.0);
+    float srcGlow = exp(-d1 * 6.0) + exp(-d2 * 6.0) + exp(-d3 * 6.0) + exp(-d4 * 6.0);
+
+    float lum = clamp(brightness * brightness + peak * 0.5 + srcGlow * 0.15, 0.0, 1.0);
+    return float4(lum, lum, lum, 0.8);
+}
+
+// ============================================================
+// Video Rainbow — luminance pattern for video color tinting
+// ============================================================
+float4 videoRainbowPattern(float2 uv, float t, float intensity) {
+    float2 center = uv - 0.5;
+    float dist = length(center);
+    float angle = atan2(center.y, center.x);
+
+    float n = fbm(uv * 3.0 * intensity + float2(t * 0.2));
+
+    float hue = fract(angle / (M_PI_F * 2.0) + dist * 3.0 * intensity + n * 0.5 - t * 0.3);
+    // Convert hue cycle to luminance wave
+    float lum = 0.5 + 0.5 * sin(hue * M_PI_F * 2.0);
+
+    // Add swirl distortion
+    float swirl = sin(dist * 10.0 * intensity - t * 2.0 + n * 5.0) * 0.5 + 0.5;
+    lum *= 0.7 + swirl * 0.3;
+
+    lum = clamp(lum, 0.0, 1.0);
+    return float4(lum, lum, lum, 0.8);
+}
+
+// ============================================================
+// Video Aurora — luminance pattern for video color tinting
+// ============================================================
+float4 videoAuroraPattern(float2 uv, float t, float intensity) {
+    float2 p = uv * 2.0 * intensity;
+
+    // Vertical curtain waves
+    float curtain1 = sin(p.x * 3.0 + t * 0.5 + fbm(float2(p.x * 2.0, t * 0.3)) * 3.0);
+    float curtain2 = sin(p.x * 5.0 - t * 0.3 + fbm(float2(p.x * 1.5, t * 0.2 + 5.0)) * 2.0);
+    float curtain3 = sin(p.x * 7.0 + t * 0.7 + fbm(float2(p.x * 3.0, t * 0.15 + 10.0)) * 1.5);
+
+    // Vertical fade
+    float vertFade = smoothstep(0.0, 0.8, uv.y) * smoothstep(1.0, 0.6, uv.y);
+
+    // Flowing noise
+    float n1 = fbm(p + float2(t * 0.2, t * 0.1));
+    float n2 = fbm(p * 1.3 + float2(-t * 0.15, t * 0.25) + n1);
+
+    // Layer intensities
+    float layer1 = pow(max(0.0, 0.5 + curtain1 * 0.5), 3.0) * vertFade;
+    float layer2 = pow(max(0.0, 0.5 + curtain2 * 0.5), 4.0) * vertFade;
+    float layer3 = pow(max(0.0, 0.5 + curtain3 * 0.5), 5.0) * vertFade;
+
+    // Combine layers into luminance
+    float lum = layer1 * (0.8 + n1 * 0.4)
+              + layer2 * (0.6 + n2 * 0.5)
+              + layer3 * 0.7
+              + layer1 * layer2 * 0.5;
+
+    // Shimmer
+    float shimmer = sin(p.x * 20.0 + p.y * 10.0 + t * 4.0) * 0.5 + 0.5;
+    lum += 0.1 * shimmer * vertFade * n1;
+
+    lum = clamp(lum, 0.0, 1.0);
+    return float4(lum, lum, lum, 0.85);
+}
+
 kernel void generatePsychedelicTexture(
     texture2d<half, access::write> output [[texture(0)]],
     constant PsychedelicParams& params [[buffer(0)]],
@@ -521,6 +632,10 @@ kernel void generatePsychedelicTexture(
         case 9: color = sparklesPattern(uv, t, params.intensity); break;
         case 10: color = heartsPattern(uv, t, params.intensity); break;
         case 11: color = causticPattern(uv, t, params.intensity); break;
+        case 12: color = videoPsychedelicPattern(uv, t, params.intensity); break;
+        case 13: color = videoInterferencePattern(uv, t, params.intensity); break;
+        case 14: color = videoRainbowPattern(uv, t, params.intensity); break;
+        case 15: color = videoAuroraPattern(uv, t, params.intensity); break;
         default: color = psychedelicPattern(uv, t, params.intensity); break;
     }
 

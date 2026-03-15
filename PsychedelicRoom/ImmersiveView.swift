@@ -48,6 +48,12 @@ struct ImmersiveView: View {
             let _ = mediaVM.slideshowEnabled
             let _ = mediaVM.slideshowRotationH
             let _ = mediaVM.slideshowRotationV
+            let _ = mediaVM.videoColorTop
+            let _ = mediaVM.videoColorMiddle
+            let _ = mediaVM.videoColorBottom
+            let _ = mediaVM.slideshowColorTop
+            let _ = mediaVM.slideshowColorMiddle
+            let _ = mediaVM.slideshowColorBottom
 
             // MARK: - Psychedelic parameters
             let filter: Set<MeshAnchor.MeshClassification>?
@@ -66,6 +72,20 @@ struct ImmersiveView: View {
                 filter = nil
             }
 
+            // Select color source
+            let colorTop: SIMD3<Float>
+            let colorMiddle: SIMD3<Float>
+            let colorBottom: SIMD3<Float>
+            if appModel.colorSource == .slideshow {
+                colorTop = mediaVM.slideshowColorTop
+                colorMiddle = mediaVM.slideshowColorMiddle
+                colorBottom = mediaVM.slideshowColorBottom
+            } else {
+                colorTop = mediaVM.videoColorTop
+                colorMiddle = mediaVM.videoColorMiddle
+                colorBottom = mediaVM.videoColorBottom
+            }
+
             sceneReconstructor.updateParameters(
                 speed: appModel.speed,
                 intensity: appModel.intensity,
@@ -75,7 +95,11 @@ struct ImmersiveView: View {
                 audioReactiveEnabled: appModel.audioReactiveEnabled,
                 audioSensitivity: appModel.audioSensitivity,
                 autoPulseEnabled: appModel.autoPulseEnabled,
-                classificationFilter: filter
+                classificationFilter: filter,
+                videoColorMode: appModel.videoColorMode,
+                videoColorTop: colorTop,
+                videoColorMiddle: colorMiddle,
+                videoColorBottom: colorBottom
             )
             occlusionPanel.update(
                 enabled: appModel.occlusionPanelEnabled,

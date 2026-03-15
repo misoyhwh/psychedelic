@@ -30,6 +30,31 @@ class SceneReconstructor {
     private var classificationFilter: Set<MeshAnchor.MeshClassification>? = nil
     private var anchorCache: [UUID: MeshAnchor] = [:]
 
+    // Video color mode & video pattern support
+    private var videoColorMode: Bool = false
+    private var videoColorTop: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
+    private var videoColorMiddle: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
+    private var videoColorBottom: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
+
+    // Classification-split entities (used for video color mode and video patterns)
+    private var ceilingEntities: [UUID: ModelEntity] = [:]
+    private var floorEntities: [UUID: ModelEntity] = [:]
+    private var otherEntities: [UUID: ModelEntity] = [:]
+    private var lastSplitMode: Bool = false
+
+    private static let ceilingClassifications: Set<MeshAnchor.MeshClassification> = [.ceiling]
+    private static let floorClassifications: Set<MeshAnchor.MeshClassification> = [.floor]
+    private static let otherClassifications: Set<MeshAnchor.MeshClassification> = [.wall, .table, .seat, .window, .door, .none]
+
+    /// Whether entities need to be split by classification (ceiling/floor/other)
+    private var isVideoPattern: Bool {
+        style == .videoPsychedelic || style == .videoInterference || style == .videoRainbow || style == .videoAurora
+    }
+
+    private var splitMode: Bool {
+        videoColorMode || isVideoPattern
+    }
+
     func start() async {
         guard SceneReconstructionProvider.isSupported else {
             print("SceneReconstructionProvider is not supported on this device.")
@@ -57,25 +82,35 @@ class SceneReconstructor {
             switch update.event {
             case .added:
                 anchorCache[anchor.id] = anchor
-                if let entity = try? await createMeshEntity(from: anchor) {
-                    meshEntities[anchor.id] = entity
-                    rootEntity.addChild(entity)
+                if splitMode {
+                    await addSplitEntities(for: anchor)
+                } else {
+                    if let entity = try? await createMeshEntity(from: anchor) {
+                        meshEntities[anchor.id] = entity
+                        rootEntity.addChild(entity)
+                    }
                 }
 
             case .updated:
                 anchorCache[anchor.id] = anchor
-                if let existingEntity = meshEntities[anchor.id] {
-                    existingEntity.transform = Transform(matrix: anchor.originFromAnchorTransform)
-                    if let newMesh = try? await generateFilteredMeshResource(from: anchor) {
-                        existingEntity.model?.mesh = newMesh
+                if splitMode {
+                    await updateSplitEntities(for: anchor)
+                } else {
+                    if let existingEntity = meshEntities[anchor.id] {
+                        existingEntity.transform = Transform(matrix: anchor.originFromAnchorTransform)
+                        if let newMesh = try? await generateMeshResource(from: anchor, filter: classificationFilter) {
+                            existingEntity.model?.mesh = newMesh
+                        }
                     }
                 }
 
             case .removed:
                 anchorCache.removeValue(forKey: anchor.id)
-                if let entity = meshEntities.removeValue(forKey: anchor.id) {
-                    entity.removeFromParent()
-                }
+                // Clean up all possible entity types
+                meshEntities.removeValue(forKey: anchor.id)?.removeFromParent()
+                ceilingEntities.removeValue(forKey: anchor.id)?.removeFromParent()
+                floorEntities.removeValue(forKey: anchor.id)?.removeFromParent()
+                otherEntities.removeValue(forKey: anchor.id)?.removeFromParent()
             }
         }
     }
@@ -87,7 +122,13 @@ class SceneReconstructor {
     func updateParameters(speed: Float, intensity: Float, style: AppModel.PatternStyle,
                           opacity: Float, particlesEnabled: Bool, audioReactiveEnabled: Bool,
                           audioSensitivity: Float, autoPulseEnabled: Bool,
-                          classificationFilter: Set<MeshAnchor.MeshClassification>?) {
+                          classificationFilter: Set<MeshAnchor.MeshClassification>?,
+                          videoColorMode: Bool,
+                          videoColorTop: SIMD3<Float>,
+                          videoColorMiddle: SIMD3<Float>,
+                          videoColorBottom: SIMD3<Float>) {
+        let oldSplitMode = self.splitMode
+
         self.speed = speed
         self.intensity = intensity
         self.style = style
@@ -95,43 +136,180 @@ class SceneReconstructor {
         self.particlesEnabled = particlesEnabled
         self.audioReactiveEnabled = audioReactiveEnabled
         self.audioSensitivity = audioSensitivity
-        if self.classificationFilter != classificationFilter {
-            self.classificationFilter = classificationFilter
+        self.videoColorMode = videoColorMode
+        self.videoColorTop = videoColorTop
+        self.videoColorMiddle = videoColorMiddle
+        self.videoColorBottom = videoColorBottom
+
+        let filterChanged = self.classificationFilter != classificationFilter
+        self.classificationFilter = classificationFilter
+
+        let newSplitMode = self.splitMode
+        if oldSplitMode != newSplitMode {
+            switchMeshMode()
+        } else if filterChanged {
             rebuildAllMeshes()
         }
     }
 
     private func pullAudioLevels() {
         guard audioReactiveEnabled, let engine = audioEngine else { return }
-        // AudioReactiveEngine now updates itself via its own DisplayLink
-        // We just read the latest values
         audioLevel = engine.audioLevel
         bassLevel = engine.bassLevel
         trebleLevel = engine.trebleLevel
     }
 
-    // MARK: - Mesh Creation
+    // MARK: - Mesh Creation (Normal Mode)
 
     private func createMeshEntity(from anchor: MeshAnchor) async throws -> ModelEntity {
-        let meshResource = try await generateFilteredMeshResource(from: anchor)
+        let meshResource = try await generateMeshResource(from: anchor, filter: classificationFilter)
         let material = getOrCreateMaterial()
         let entity = ModelEntity(mesh: meshResource, materials: [material])
         entity.transform = Transform(matrix: anchor.originFromAnchorTransform)
         return entity
     }
 
-    private func rebuildAllMeshes() {
-        Task {
-            for (id, anchor) in anchorCache {
-                guard let entity = meshEntities[id] else { continue }
-                if let newMesh = try? await generateFilteredMeshResource(from: anchor) {
-                    entity.model?.mesh = newMesh
+    // MARK: - Mesh Creation (Split Mode — Video Color & Video Pattern)
+
+    private func addSplitEntities(for anchor: MeshAnchor) async {
+        // Ceiling
+        let ceilingFilter = effectiveFilter(for: Self.ceilingClassifications)
+        if !ceilingFilter.isEmpty, let mesh = try? await generateMeshResource(from: anchor, filter: ceilingFilter) {
+            let material = createSplitMaterial(color: videoColorTop)
+            let entity = ModelEntity(mesh: mesh, materials: [material])
+            entity.transform = Transform(matrix: anchor.originFromAnchorTransform)
+            rootEntity.addChild(entity)
+            ceilingEntities[anchor.id] = entity
+        }
+        // Floor
+        let floorFilter = effectiveFilter(for: Self.floorClassifications)
+        if !floorFilter.isEmpty, let mesh = try? await generateMeshResource(from: anchor, filter: floorFilter) {
+            let material = createSplitMaterial(color: videoColorBottom)
+            let entity = ModelEntity(mesh: mesh, materials: [material])
+            entity.transform = Transform(matrix: anchor.originFromAnchorTransform)
+            rootEntity.addChild(entity)
+            floorEntities[anchor.id] = entity
+        }
+        // Other (walls, tables, etc.)
+        let otherFilter = effectiveFilter(for: Self.otherClassifications)
+        if !otherFilter.isEmpty, let mesh = try? await generateMeshResource(from: anchor, filter: otherFilter) {
+            let material = createSplitMaterial(color: videoColorMiddle)
+            let entity = ModelEntity(mesh: mesh, materials: [material])
+            entity.transform = Transform(matrix: anchor.originFromAnchorTransform)
+            rootEntity.addChild(entity)
+            otherEntities[anchor.id] = entity
+        }
+    }
+
+    private func updateSplitEntities(for anchor: MeshAnchor) async {
+        if let entity = ceilingEntities[anchor.id] {
+            entity.transform = Transform(matrix: anchor.originFromAnchorTransform)
+            let filter = effectiveFilter(for: Self.ceilingClassifications)
+            if !filter.isEmpty, let mesh = try? await generateMeshResource(from: anchor, filter: filter) {
+                entity.model?.mesh = mesh
+            }
+        }
+        if let entity = floorEntities[anchor.id] {
+            entity.transform = Transform(matrix: anchor.originFromAnchorTransform)
+            let filter = effectiveFilter(for: Self.floorClassifications)
+            if !filter.isEmpty, let mesh = try? await generateMeshResource(from: anchor, filter: filter) {
+                entity.model?.mesh = mesh
+            }
+        }
+        if let entity = otherEntities[anchor.id] {
+            entity.transform = Transform(matrix: anchor.originFromAnchorTransform)
+            let filter = effectiveFilter(for: Self.otherClassifications)
+            if !filter.isEmpty, let mesh = try? await generateMeshResource(from: anchor, filter: filter) {
+                entity.model?.mesh = mesh
+            }
+        }
+    }
+
+    private func effectiveFilter(for group: Set<MeshAnchor.MeshClassification>) -> Set<MeshAnchor.MeshClassification> {
+        if let cf = classificationFilter {
+            return cf.intersection(group)
+        }
+        return group
+    }
+
+    /// Create a material for split-mode entities.
+    /// videoColorMode → solid color, videoPattern → textured + tinted
+    private func createSplitMaterial(color: SIMD3<Float>) -> UnlitMaterial {
+        var material = UnlitMaterial()
+        let tint: UIColor = .init(red: CGFloat(color.x), green: CGFloat(color.y), blue: CGFloat(color.z), alpha: 1.0)
+
+        if isVideoPattern, !videoColorMode, let texture = textureGenerator?.textureResource {
+            // Video pattern: grayscale texture tinted with video color
+            material.color = .init(tint: tint, texture: .init(texture))
+        } else {
+            // Video color mode: solid color
+            material.color = .init(tint: tint)
+        }
+        material.blending = .transparent(opacity: .init(floatLiteral: Float(opacity)))
+        return material
+    }
+
+    // MARK: - Mode Switching
+
+    private func switchMeshMode() {
+        if splitMode {
+            // Remove normal entities
+            for entity in meshEntities.values { entity.removeFromParent() }
+            meshEntities.removeAll()
+            // Build split entities
+            Task {
+                for (_, anchor) in anchorCache {
+                    await addSplitEntities(for: anchor)
+                }
+            }
+        } else {
+            // Remove split entities
+            for entity in ceilingEntities.values { entity.removeFromParent() }
+            for entity in floorEntities.values { entity.removeFromParent() }
+            for entity in otherEntities.values { entity.removeFromParent() }
+            ceilingEntities.removeAll()
+            floorEntities.removeAll()
+            otherEntities.removeAll()
+            // Rebuild normal entities
+            Task {
+                for (_, anchor) in anchorCache {
+                    if let entity = try? await createMeshEntity(from: anchor) {
+                        meshEntities[anchor.id] = entity
+                        rootEntity.addChild(entity)
+                    }
                 }
             }
         }
     }
 
-    private func generateFilteredMeshResource(from anchor: MeshAnchor) async throws -> MeshResource {
+    private func rebuildAllMeshes() {
+        if splitMode {
+            for entity in ceilingEntities.values { entity.removeFromParent() }
+            for entity in floorEntities.values { entity.removeFromParent() }
+            for entity in otherEntities.values { entity.removeFromParent() }
+            ceilingEntities.removeAll()
+            floorEntities.removeAll()
+            otherEntities.removeAll()
+            Task {
+                for (_, anchor) in anchorCache {
+                    await addSplitEntities(for: anchor)
+                }
+            }
+        } else {
+            Task {
+                for (id, anchor) in anchorCache {
+                    guard let entity = meshEntities[id] else { continue }
+                    if let newMesh = try? await generateMeshResource(from: anchor, filter: classificationFilter) {
+                        entity.model?.mesh = newMesh
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Mesh Resource Generation
+
+    private func generateMeshResource(from anchor: MeshAnchor, filter: Set<MeshAnchor.MeshClassification>?) async throws -> MeshResource {
         let meshGeometry = anchor.geometry
 
         // Read all positions
@@ -161,9 +339,8 @@ class SceneReconstructor {
         // Build indices — optionally filter by classification
         var filteredIndices: [UInt32] = []
 
-        if let activeFilter = classificationFilter,
+        if let activeFilter = filter,
            let classifications = meshGeometry.classifications {
-            // Classification filter mode: only include faces matching selected types
             let classData = classifications.buffer.contents()
             for faceIndex in 0..<faces.count {
                 let classPointer = classData.advanced(by: classifications.offset + faceIndex * classifications.stride)
@@ -183,7 +360,6 @@ class SceneReconstructor {
                 }
             }
         } else {
-            // All-mesh mode: include every face (covers everything)
             for i in 0..<(faces.count * indicesPerFace) {
                 let pointer = faceData.advanced(by: i * bytesPerIndex)
                 if bytesPerIndex == 4 {
@@ -227,6 +403,10 @@ class SceneReconstructor {
         case .sparkles: return 9
         case .hearts: return 10
         case .caustic: return 11
+        case .videoPsychedelic: return 12
+        case .videoInterference: return 13
+        case .videoRainbow: return 14
+        case .videoAurora: return 15
         }
     }
 
@@ -244,7 +424,6 @@ class SceneReconstructor {
             material.color = .init(tint: .init(red: 1, green: 0, blue: 1, alpha: 0.8))
         }
 
-        // Audio-reactive opacity: base from slider, boosted by bass * sensitivity
         let effectiveOpacity: Float
         if audioReactiveEnabled {
             effectiveOpacity = min(opacity * 0.4 + bassLevel * 0.65 * audioSensitivity, 1.0)
@@ -269,13 +448,10 @@ class SceneReconstructor {
                 let floatDt = Float(dt)
                 self.currentTime += floatDt * self.speed
                 self.frameCount += 1
-                // Pull latest audio levels from the audio engine
                 self.pullAudioLevels()
-                // Update texture every 3rd frame for performance (30fps on 90Hz display)
                 if self.frameCount % 3 == 0 {
                     self.updateMaterials()
                 }
-                // Update particles every frame for smooth motion
                 if self.particlesEnabled {
                     self.particleSystem.update(
                         deltaTime: floatDt,
@@ -294,7 +470,18 @@ class SceneReconstructor {
     }
 
     private func updateMaterials() {
-        // Update the GPU texture in-place (non-blocking)
+        if videoColorMode {
+            // Video color mode: solid colors, no texture
+            let ceilingMat = createSplitMaterial(color: videoColorTop)
+            let floorMat = createSplitMaterial(color: videoColorBottom)
+            let otherMat = createSplitMaterial(color: videoColorMiddle)
+            for entity in ceilingEntities.values { entity.model?.materials = [ceilingMat] }
+            for entity in floorEntities.values { entity.model?.materials = [floorMat] }
+            for entity in otherEntities.values { entity.model?.materials = [otherMat] }
+            return
+        }
+
+        // Generate texture (for both normal and video pattern modes)
         textureGenerator?.updateTexture(
             time: currentTime,
             speed: speed,
@@ -302,15 +489,25 @@ class SceneReconstructor {
             styleIndex: styleIndex
         )
 
+        if isVideoPattern {
+            // Video pattern mode: grayscale texture tinted with video colors
+            let ceilingMat = createSplitMaterial(color: videoColorTop)
+            let floorMat = createSplitMaterial(color: videoColorBottom)
+            let otherMat = createSplitMaterial(color: videoColorMiddle)
+            for entity in ceilingEntities.values { entity.model?.materials = [ceilingMat] }
+            for entity in floorEntities.values { entity.model?.materials = [floorMat] }
+            for entity in otherEntities.values { entity.model?.materials = [otherMat] }
+            return
+        }
+
+        // Normal psychedelic mode
         let needsFullUpdate = audioReactiveEnabled || lastCachedOpacity != opacity
         let material = getOrCreateMaterial()
         if needsFullUpdate {
-            // Update all entities when opacity or audio changes
             for entity in meshEntities.values {
                 entity.model?.materials = [material]
             }
         } else {
-            // Apply material only to entities that don't have one yet
             for entity in meshEntities.values {
                 if entity.model?.materials.first is UnlitMaterial {
                     continue

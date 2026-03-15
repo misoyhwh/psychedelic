@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import CoreVideo
 import RealityKit
 import RealityKitContent
 
@@ -19,10 +20,21 @@ class MediaPanelViewModel {
     var videoDuration: Double = 0
     var isSeeking: Bool = false
 
+    // Video color sampling
+    var videoColorTop: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
+    var videoColorMiddle: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
+    var videoColorBottom: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
+
     var player: AVPlayer?
     private var videoAccessedURL: URL?
     private var loopObserver: Any?
     private var timeObserver: Any?
+    private var videoOutput: AVPlayerItemVideoOutput?
+
+    // Slideshow color sampling
+    var slideshowColorTop: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
+    var slideshowColorMiddle: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
+    var slideshowColorBottom: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
 
     // MARK: - Slideshow Panel
     var slideshowEnabled: Bool = false
@@ -61,6 +73,15 @@ class MediaPanelViewModel {
 
         videoURL = url
         let item = AVPlayerItem(url: url)
+
+        // Add video output for color sampling
+        let outputAttrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ]
+        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: outputAttrs)
+        item.add(output)
+        videoOutput = output
+
         let newPlayer = AVPlayer(playerItem: item)
 
         // Loop observer
@@ -84,6 +105,7 @@ class MediaPanelViewModel {
                 if let duration = self.player?.currentItem?.duration, duration.isNumeric {
                     self.videoDuration = duration.seconds
                 }
+                self.sampleVideoColors()
             }
         }
 
@@ -101,6 +123,12 @@ class MediaPanelViewModel {
     }
 
     private func cleanupPlayer() {
+        // Remove video output
+        if let output = videoOutput, let item = player?.currentItem {
+            item.remove(output)
+        }
+        videoOutput = nil
+
         // Remove time observer from OLD player
         if let obs = timeObserver, let oldPlayer = player {
             oldPlayer.removeTimeObserver(obs)
@@ -157,6 +185,58 @@ class MediaPanelViewModel {
         } catch {
             print("Failed to load video size: \(error)")
         }
+    }
+
+    // MARK: - Video Color Sampling
+
+    private func sampleVideoColors() {
+        guard let output = videoOutput, let player = player else { return }
+        let time = player.currentTime()
+        guard let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else { return }
+
+        CVPixelBufferLockBaseAddress(buffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return }
+        let w = CVPixelBufferGetWidth(buffer)
+        let h = CVPixelBufferGetHeight(buffer)
+        let bpr = CVPixelBufferGetBytesPerRow(buffer)
+        guard w > 0, h > 0 else { return }
+
+        // Top edge center strip → ceiling
+        let sampledTop = sampleRegionColor(base, bpr: bpr, w: w, h: h, cx: w / 2, cy: 2, rx: w / 4, ry: 2)
+        // Right edge middle strip → walls
+        let sampledMiddle = sampleRegionColor(base, bpr: bpr, w: w, h: h, cx: w - 3, cy: h / 2, rx: 2, ry: h / 4)
+        // Bottom edge center strip → floor
+        let sampledBottom = sampleRegionColor(base, bpr: bpr, w: w, h: h, cx: w / 2, cy: h - 3, rx: w / 4, ry: 2)
+
+        // Smooth transition
+        let blend: Float = 0.3
+        videoColorTop = videoColorTop * (1.0 - blend) + sampledTop * blend
+        videoColorMiddle = videoColorMiddle * (1.0 - blend) + sampledMiddle * blend
+        videoColorBottom = videoColorBottom * (1.0 - blend) + sampledBottom * blend
+    }
+
+    private func sampleRegionColor(_ base: UnsafeMutableRawPointer, bpr: Int, w: Int, h: Int,
+                                    cx: Int, cy: Int, rx: Int, ry: Int) -> SIMD3<Float> {
+        var rSum: Float = 0, gSum: Float = 0, bSum: Float = 0
+        var count: Float = 0
+        let stepX = max(1, rx / 4)
+        let stepY = max(1, ry / 4)
+        for dy in stride(from: -ry, through: ry, by: stepY) {
+            for dx in stride(from: -rx, through: rx, by: stepX) {
+                let x = min(max(cx + dx, 0), w - 1)
+                let y = min(max(cy + dy, 0), h - 1)
+                let ptr = base.advanced(by: y * bpr + x * 4).assumingMemoryBound(to: UInt8.self)
+                // BGRA format
+                bSum += Float(ptr[0]) / 255.0
+                gSum += Float(ptr[1]) / 255.0
+                rSum += Float(ptr[2]) / 255.0
+                count += 1
+            }
+        }
+        guard count > 0 else { return SIMD3<Float>(0.1, 0.1, 0.1) }
+        return SIMD3<Float>(rSum / count, gSum / count, bSum / count)
     }
 
     // MARK: - Slideshow Methods
@@ -230,6 +310,11 @@ class MediaPanelViewModel {
 
                 guard !Task.isCancelled else { return }
 
+                // Sample colors from the image before assigning textures
+                if let cgImage = self.loadCGImage(from: image.url) {
+                    self.sampleSlideshowColors(from: cgImage)
+                }
+
                 // Release old textures before assigning new ones
                 slideshowTexture = nil
                 slideshowRightTexture = nil
@@ -245,5 +330,64 @@ class MediaPanelViewModel {
                 }
             }
         }
+    }
+
+    // MARK: - Slideshow Color Sampling
+
+    private func loadCGImage(from url: URL) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+    }
+
+    private func sampleSlideshowColors(from cgImage: CGImage) {
+        let w = cgImage.width
+        let h = cgImage.height
+        guard w > 0, h > 0 else { return }
+
+        guard let context = CGContext(
+            data: nil,
+            width: w, height: h,
+            bitsPerComponent: 8,
+            bytesPerRow: w * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return }
+
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let data = context.data else { return }
+
+        // RGBA format (premultipliedLast)
+        // Top edge center strip → ceiling
+        let sampledTop = sampleImageRegion(data, bpr: w * 4, w: w, h: h, cx: w / 2, cy: 2, rx: w / 4, ry: 2)
+        // Right edge middle strip → walls
+        let sampledMiddle = sampleImageRegion(data, bpr: w * 4, w: w, h: h, cx: w - 3, cy: h / 2, rx: 2, ry: h / 4)
+        // Bottom edge center strip → floor
+        let sampledBottom = sampleImageRegion(data, bpr: w * 4, w: w, h: h, cx: w / 2, cy: h - 3, rx: w / 4, ry: 2)
+
+        slideshowColorTop = sampledTop
+        slideshowColorMiddle = sampledMiddle
+        slideshowColorBottom = sampledBottom
+    }
+
+    private func sampleImageRegion(_ base: UnsafeMutableRawPointer, bpr: Int, w: Int, h: Int,
+                                    cx: Int, cy: Int, rx: Int, ry: Int) -> SIMD3<Float> {
+        var rSum: Float = 0, gSum: Float = 0, bSum: Float = 0
+        var count: Float = 0
+        let stepX = max(1, rx / 4)
+        let stepY = max(1, ry / 4)
+        for dy in stride(from: -ry, through: ry, by: stepY) {
+            for dx in stride(from: -rx, through: rx, by: stepX) {
+                let x = min(max(cx + dx, 0), w - 1)
+                let y = min(max(cy + dy, 0), h - 1)
+                let ptr = base.advanced(by: y * bpr + x * 4).assumingMemoryBound(to: UInt8.self)
+                // RGBA format
+                rSum += Float(ptr[0]) / 255.0
+                gSum += Float(ptr[1]) / 255.0
+                bSum += Float(ptr[2]) / 255.0
+                count += 1
+            }
+        }
+        guard count > 0 else { return SIMD3<Float>(0.1, 0.1, 0.1) }
+        return SIMD3<Float>(rSum / count, gSum / count, bSum / count)
     }
 }

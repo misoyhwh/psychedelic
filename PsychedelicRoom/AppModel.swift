@@ -25,6 +25,16 @@ class AppModel {
     var meshFilterDoor: Bool = true
     var meshFilterOther: Bool = true
 
+    // Video color mode
+    var videoColorMode: Bool = false
+    var colorSource: ColorSource = .video
+
+    enum ColorSource: String, CaseIterable, Identifiable {
+        case video = "Video"
+        case slideshow = "Slideshow"
+        var id: String { rawValue }
+    }
+
     // Occlusion panel
     var occlusionPanelEnabled: Bool = false
     var occlusionPanelWidth: Float = 1.0    // meters
@@ -44,6 +54,10 @@ class AppModel {
         case sparkles = "Sparkles"
         case hearts = "Hearts"
         case caustic = "Caustic"
+        case videoPsychedelic = "Video Psychedelic"
+        case videoInterference = "Video Interference"
+        case videoRainbow = "Video Rainbow"
+        case videoAurora = "Video Aurora"
 
         var id: String { rawValue }
     }
