@@ -122,6 +122,10 @@ struct ImmersiveView: View {
                 rotationDegrees: appModel.occlusionPanelRotation
             )
         }
+        .onDisappear {
+            videoMotionTimer?.invalidate()
+            videoMotionTimer = nil
+        }
         .gesture(occlusionDragGesture)
         .gesture(panelDragGesture)
         .gesture(panelMagnifyGesture)
@@ -214,28 +218,34 @@ struct ImmersiveView: View {
         let surgeEnabled = mediaVM.videoSurgeEnabled
         let swayEnabled = mediaVM.videoSwayEnabled
 
-        if bobEnabled || surgeEnabled || swayEnabled {
-            if bobEnabled { videoBobBaseY = videoRootEntity.position.y }
-            if surgeEnabled { videoSurgeBaseZ = videoRootEntity.position.z }
-            if swayEnabled { videoSwayBaseX = videoRootEntity.position.x }
-            let startTime = Date()
-            videoMotionStartTime = startTime
-            videoMotionTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [self] _ in
-                Task { @MainActor in
-                    let elapsed = Float(Date().timeIntervalSince(startTime))
-                    if mediaVM.videoBobEnabled {
-                        let offsetY = sin(elapsed * mediaVM.videoBobSpeed * 2 * .pi) * mediaVM.videoBobAmplitude
-                        videoRootEntity.position.y = videoBobBaseY + offsetY
-                    }
-                    if mediaVM.videoSurgeEnabled {
-                        let offsetZ = sin(elapsed * mediaVM.videoSurgeSpeed * 2 * .pi) * mediaVM.videoSurgeAmplitude
-                        videoRootEntity.position.z = videoSurgeBaseZ + offsetZ
-                    }
-                    if mediaVM.videoSwayEnabled {
-                        let offsetX = sin(elapsed * mediaVM.videoSwaySpeed * 2 * .pi) * mediaVM.videoSwayAmplitude
-                        videoRootEntity.position.x = videoSwayBaseX + offsetX
-                    }
-                }
+        guard bobEnabled || surgeEnabled || swayEnabled else { return }
+
+        if bobEnabled { videoBobBaseY = videoRootEntity.position.y }
+        if surgeEnabled { videoSurgeBaseZ = videoRootEntity.position.z }
+        if swayEnabled { videoSwayBaseX = videoRootEntity.position.x }
+        let startTime = Date()
+        videoMotionStartTime = startTime
+
+        // Capture references to avoid retaining the entire view
+        let rootEntity = videoRootEntity
+        let vm = mediaVM
+        var baseY = videoBobBaseY
+        var baseZ = videoSurgeBaseZ
+        var baseX = videoSwayBaseX
+
+        videoMotionTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
+            let elapsed = Float(Date().timeIntervalSince(startTime))
+            if vm.videoBobEnabled {
+                let offsetY = sin(elapsed * vm.videoBobSpeed * 2 * .pi) * vm.videoBobAmplitude
+                rootEntity.position.y = baseY + offsetY
+            }
+            if vm.videoSurgeEnabled {
+                let offsetZ = sin(elapsed * vm.videoSurgeSpeed * 2 * .pi) * vm.videoSurgeAmplitude
+                rootEntity.position.z = baseZ + offsetZ
+            }
+            if vm.videoSwayEnabled {
+                let offsetX = sin(elapsed * vm.videoSwaySpeed * 2 * .pi) * vm.videoSwayAmplitude
+                rootEntity.position.x = baseX + offsetX
             }
         }
     }

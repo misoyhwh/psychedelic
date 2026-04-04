@@ -362,13 +362,25 @@ class MediaPanelViewModel {
 
     private func loadCGImage(from url: URL) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        return CGImageSourceCreateImageAtIndex(source, 0, nil)
+        // Request a downsampled thumbnail for color sampling to reduce memory usage
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: 128,
+            kCGImageSourceCreateThumbnailWithTransform: true
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
     private func sampleSlideshowColors(from cgImage: CGImage) {
-        let w = cgImage.width
-        let h = cgImage.height
-        guard w > 0, h > 0 else { return }
+        let origW = cgImage.width
+        let origH = cgImage.height
+        guard origW > 0, origH > 0 else { return }
+
+        // Downsample to small size for color sampling to avoid large memory allocation
+        let maxSampleDim = 64
+        let scale = min(Double(maxSampleDim) / Double(origW), Double(maxSampleDim) / Double(origH), 1.0)
+        let w = max(Int(Double(origW) * scale), 1)
+        let h = max(Int(Double(origH) * scale), 1)
 
         guard let context = CGContext(
             data: nil,

@@ -18,6 +18,9 @@ class ParticleSystem {
     private var colorMaterials: [UnlitMaterial] = []
     private let colorCount = 32
 
+    // Reusable material for audio-reactive mode (avoids per-particle allocation)
+    private var audioReactiveMaterial = UnlitMaterial()
+
     struct Particle {
         let entity: ModelEntity
         var age: Float = 0
@@ -118,13 +121,12 @@ class ParticleSystem {
             let colorIdx = Int(hueShift * Float(colorCount)) % colorCount
 
             if audioReactive {
-                // Brightness flashes with treble
+                // Brightness flashes with treble — reuse single material instance
                 let flashBright = 0.4 + sharpPulse * 0.6 * brightnessMult
                 let baseColor = hsvColor(h: hueShift, s: 1.0, v: flashBright, a: 1.0)
-                var mat = UnlitMaterial()
-                mat.color = .init(tint: baseColor)
-                mat.blending = .transparent(opacity: .init(floatLiteral: Float(alpha)))
-                particle.entity.model?.materials = [mat]
+                audioReactiveMaterial.color = .init(tint: baseColor)
+                audioReactiveMaterial.blending = .transparent(opacity: .init(floatLiteral: Float(alpha)))
+                particle.entity.model?.materials = [audioReactiveMaterial]
             } else {
                 particle.entity.model?.materials = [colorMaterials[colorIdx]]
             }

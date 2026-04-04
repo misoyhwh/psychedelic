@@ -8,7 +8,7 @@ class AppModel {
     var intensity: Float = 1.0
     var patternStyle: PatternStyle = .psychedelic
     var opacity: Float = 0.75  // 0.0...1.0
-    var particlesEnabled: Bool = true
+    var particlesEnabled: Bool = false
     var audioReactiveEnabled: Bool = false
     var audioSensitivity: Float = 1.0  // 0.1...3.0
     var autoPulseEnabled: Bool = false

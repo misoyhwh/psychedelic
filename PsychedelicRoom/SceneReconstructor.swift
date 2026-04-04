@@ -42,6 +42,16 @@ class SceneReconstructor {
     private var otherEntities: [UUID: ModelEntity] = [:]
     private var lastSplitMode: Bool = false
 
+    // Cached split materials to avoid per-frame allocation
+    private var cachedCeilingMat = UnlitMaterial()
+    private var cachedFloorMat = UnlitMaterial()
+    private var cachedOtherMat = UnlitMaterial()
+    private var lastCeilingColor: SIMD3<Float> = .zero
+    private var lastFloorColor: SIMD3<Float> = .zero
+    private var lastOtherColor: SIMD3<Float> = .zero
+    private var lastSplitOpacity: Float = -1
+    private var lastSplitTextureId: ObjectIdentifier?
+
     private static let ceilingClassifications: Set<MeshAnchor.MeshClassification> = [.ceiling]
     private static let floorClassifications: Set<MeshAnchor.MeshClassification> = [.floor, .stairs, .bed]
     private static let otherClassifications: Set<MeshAnchor.MeshClassification> = [.wall, .cabinet, .table, .seat, .window, .door, .homeAppliance, .tv, .plant, .none]
@@ -251,6 +261,28 @@ class SceneReconstructor {
         return material
     }
 
+    /// Update cached split materials only when colors/opacity/texture actually change
+    private func updateCachedSplitMaterials() {
+        let currentTextureId = textureGenerator?.textureResource.map { ObjectIdentifier($0) }
+        let colorsChanged = videoColorTop != lastCeilingColor
+            || videoColorBottom != lastFloorColor
+            || videoColorMiddle != lastOtherColor
+            || opacity != lastSplitOpacity
+            || currentTextureId != lastSplitTextureId
+
+        guard colorsChanged else { return }
+
+        cachedCeilingMat = createSplitMaterial(color: videoColorTop)
+        cachedFloorMat = createSplitMaterial(color: videoColorBottom)
+        cachedOtherMat = createSplitMaterial(color: videoColorMiddle)
+
+        lastCeilingColor = videoColorTop
+        lastFloorColor = videoColorBottom
+        lastOtherColor = videoColorMiddle
+        lastSplitOpacity = opacity
+        lastSplitTextureId = currentTextureId
+    }
+
     // MARK: - Mode Switching
 
     private func switchMeshMode() {
@@ -444,9 +476,14 @@ class SceneReconstructor {
 
     // MARK: - Animation Loop
 
+    private var displayLinkTaskInFlight = false
+
     private func startDisplayLink() {
         let link = CADisplayLink(target: DisplayLinkTarget { [weak self] dt in
-            Task { @MainActor in
+            guard let self, !self.displayLinkTaskInFlight else { return }
+            self.displayLinkTaskInFlight = true
+            Task { @MainActor [weak self] in
+                defer { self?.displayLinkTaskInFlight = false }
                 guard let self else { return }
                 let floatDt = Float(dt)
                 self.currentTime += floatDt * self.speed
@@ -484,12 +521,10 @@ class SceneReconstructor {
 
         if videoColorMode {
             // Video color mode: solid colors, no texture
-            let ceilingMat = createSplitMaterial(color: videoColorTop)
-            let floorMat = createSplitMaterial(color: videoColorBottom)
-            let otherMat = createSplitMaterial(color: videoColorMiddle)
-            for entity in ceilingEntities.values { entity.model?.materials = [ceilingMat] }
-            for entity in floorEntities.values { entity.model?.materials = [floorMat] }
-            for entity in otherEntities.values { entity.model?.materials = [otherMat] }
+            updateCachedSplitMaterials()
+            for entity in ceilingEntities.values { entity.model?.materials = [cachedCeilingMat] }
+            for entity in floorEntities.values { entity.model?.materials = [cachedFloorMat] }
+            for entity in otherEntities.values { entity.model?.materials = [cachedOtherMat] }
             return
         }
 
@@ -503,12 +538,10 @@ class SceneReconstructor {
 
         if isVideoPattern {
             // Video pattern mode: grayscale texture tinted with video colors
-            let ceilingMat = createSplitMaterial(color: videoColorTop)
-            let floorMat = createSplitMaterial(color: videoColorBottom)
-            let otherMat = createSplitMaterial(color: videoColorMiddle)
-            for entity in ceilingEntities.values { entity.model?.materials = [ceilingMat] }
-            for entity in floorEntities.values { entity.model?.materials = [floorMat] }
-            for entity in otherEntities.values { entity.model?.materials = [otherMat] }
+            updateCachedSplitMaterials()
+            for entity in ceilingEntities.values { entity.model?.materials = [cachedCeilingMat] }
+            for entity in floorEntities.values { entity.model?.materials = [cachedFloorMat] }
+            for entity in otherEntities.values { entity.model?.materials = [cachedOtherMat] }
             return
         }
 
