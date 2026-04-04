@@ -14,6 +14,15 @@ class MediaPanelViewModel {
     var videoSize: CGSize = CGSize(width: 1.92, height: 1.08)
     var videoRotationH: Float = 0
     var videoRotationV: Float = 0
+    var videoBobEnabled: Bool = false
+    var videoBobAmplitude: Float = 0.3    // vertical meters (0.05...1.0)
+    var videoBobSpeed: Float = 0.2        // cycles per second (0.02...0.5)
+    var videoSurgeEnabled: Bool = false
+    var videoSurgeAmplitude: Float = 0.3  // forward/back meters (0.05...1.0)
+    var videoSurgeSpeed: Float = 0.2      // cycles per second (0.02...0.5)
+    var videoSwayEnabled: Bool = false
+    var videoSwayAmplitude: Float = 0.3   // left/right meters (0.05...1.0)
+    var videoSwaySpeed: Float = 0.2       // cycles per second (0.02...0.5)
     var videoVersion: Int = 0
 
     var videoCurrentTime: Double = 0
@@ -192,32 +201,46 @@ class MediaPanelViewModel {
     private func sampleVideoColors() {
         guard let output = videoOutput, let player = player else { return }
         let time = player.currentTime()
-        guard let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else { return }
 
-        CVPixelBufferLockBaseAddress(buffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+        // Use autoreleasepool to ensure timely release of large pixel buffers
+        autoreleasepool {
+            guard let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else { return }
 
-        guard let base = CVPixelBufferGetBaseAddress(buffer) else { return }
-        let w = CVPixelBufferGetWidth(buffer)
-        let h = CVPixelBufferGetHeight(buffer)
-        let bpr = CVPixelBufferGetBytesPerRow(buffer)
-        guard w > 0, h > 0 else { return }
+            // Verify pixel format is BGRA (spatial/MV-HEVC may use different formats)
+            let pixelFormat = CVPixelBufferGetPixelFormatType(buffer)
+            guard pixelFormat == kCVPixelFormatType_32BGRA else { return }
 
-        // Top edge center strip → ceiling
-        let sampledTop = sampleRegionColor(base, bpr: bpr, w: w, h: h, cx: w / 2, cy: 2, rx: w / 4, ry: 2)
-        // Right edge middle strip → walls
-        let sampledMiddle = sampleRegionColor(base, bpr: bpr, w: w, h: h, cx: w - 3, cy: h / 2, rx: 2, ry: h / 4)
-        // Bottom edge center strip → floor
-        let sampledBottom = sampleRegionColor(base, bpr: bpr, w: w, h: h, cx: w / 2, cy: h - 3, rx: w / 4, ry: 2)
+            // Reject planar buffers (MV-HEVC may return multi-plane buffers)
+            guard !CVPixelBufferIsPlanar(buffer) else { return }
 
-        // Smooth transition
-        let blend: Float = 0.3
-        videoColorTop = videoColorTop * (1.0 - blend) + sampledTop * blend
-        videoColorMiddle = videoColorMiddle * (1.0 - blend) + sampledMiddle * blend
-        videoColorBottom = videoColorBottom * (1.0 - blend) + sampledBottom * blend
+            CVPixelBufferLockBaseAddress(buffer, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+
+            guard let base = CVPixelBufferGetBaseAddress(buffer) else { return }
+            let w = CVPixelBufferGetWidth(buffer)
+            let h = CVPixelBufferGetHeight(buffer)
+            let bpr = CVPixelBufferGetBytesPerRow(buffer)
+            guard w > 0, h > 0, bpr >= w * 4 else { return }
+
+            let bufferSize = bpr * h
+
+            // Top edge center strip → ceiling
+            let sampledTop = sampleRegionColor(base, bpr: bpr, w: w, h: h, bufferSize: bufferSize, cx: w / 2, cy: 2, rx: w / 4, ry: 2)
+            // Right edge middle strip → walls
+            let sampledMiddle = sampleRegionColor(base, bpr: bpr, w: w, h: h, bufferSize: bufferSize, cx: w - 3, cy: h / 2, rx: 2, ry: h / 4)
+            // Bottom edge center strip → floor
+            let sampledBottom = sampleRegionColor(base, bpr: bpr, w: w, h: h, bufferSize: bufferSize, cx: w / 2, cy: h - 3, rx: w / 4, ry: 2)
+
+            // Smooth transition
+            let blend: Float = 0.3
+            videoColorTop = videoColorTop * (1.0 - blend) + sampledTop * blend
+            videoColorMiddle = videoColorMiddle * (1.0 - blend) + sampledMiddle * blend
+            videoColorBottom = videoColorBottom * (1.0 - blend) + sampledBottom * blend
+        }
     }
 
     private func sampleRegionColor(_ base: UnsafeMutableRawPointer, bpr: Int, w: Int, h: Int,
+                                    bufferSize: Int,
                                     cx: Int, cy: Int, rx: Int, ry: Int) -> SIMD3<Float> {
         var rSum: Float = 0, gSum: Float = 0, bSum: Float = 0
         var count: Float = 0
@@ -227,7 +250,10 @@ class MediaPanelViewModel {
             for dx in stride(from: -rx, through: rx, by: stepX) {
                 let x = min(max(cx + dx, 0), w - 1)
                 let y = min(max(cy + dy, 0), h - 1)
-                let ptr = base.advanced(by: y * bpr + x * 4).assumingMemoryBound(to: UInt8.self)
+                let offset = y * bpr + x * 4
+                // Bounds check to prevent out-of-range access
+                guard offset >= 0, offset + 3 < bufferSize else { continue }
+                let ptr = base.advanced(by: offset).assumingMemoryBound(to: UInt8.self)
                 // BGRA format
                 bSum += Float(ptr[0]) / 255.0
                 gSum += Float(ptr[1]) / 255.0

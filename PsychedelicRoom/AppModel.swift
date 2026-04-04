@@ -18,11 +18,17 @@ class AppModel {
     var meshClassificationFilterEnabled: Bool = false  // OFF = cover all surfaces
     var meshFilterWall: Bool = true
     var meshFilterFloor: Bool = true
+    var meshFilterStairs: Bool = true
+    var meshFilterBed: Bool = true
     var meshFilterCeiling: Bool = true
     var meshFilterTable: Bool = true
     var meshFilterSeat: Bool = true
+    var meshFilterCabinet: Bool = true
     var meshFilterWindow: Bool = true
     var meshFilterDoor: Bool = true
+    var meshFilterHomeAppliance: Bool = true
+    var meshFilterTV: Bool = true
+    var meshFilterPlant: Bool = true
     var meshFilterOther: Bool = true
 
     // Video color mode
@@ -58,6 +64,7 @@ class AppModel {
         case videoInterference = "Video Interference"
         case videoRainbow = "Video Rainbow"
         case videoAurora = "Video Aurora"
+        case occlusion = "Occlusion"
 
         var id: String { rawValue }
     }

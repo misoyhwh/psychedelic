@@ -183,6 +183,12 @@ struct ContentView: View {
                         Toggle("床 (Floor)", isOn: $appModel.meshFilterFloor)
                             .toggleStyle(.switch)
                             .controlSize(.small)
+                        Toggle("階段 (Stairs)", isOn: $appModel.meshFilterStairs)
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                        Toggle("ベッド (Bed)", isOn: $appModel.meshFilterBed)
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
                         Toggle("天井 (Ceiling)", isOn: $appModel.meshFilterCeiling)
                             .toggleStyle(.switch)
                             .controlSize(.small)
@@ -192,10 +198,22 @@ struct ContentView: View {
                         Toggle("椅子 (Seat)", isOn: $appModel.meshFilterSeat)
                             .toggleStyle(.switch)
                             .controlSize(.small)
+                        Toggle("棚 (Cabinet)", isOn: $appModel.meshFilterCabinet)
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
                         Toggle("窓 (Window)", isOn: $appModel.meshFilterWindow)
                             .toggleStyle(.switch)
                             .controlSize(.small)
                         Toggle("ドア (Door)", isOn: $appModel.meshFilterDoor)
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                        Toggle("家電 (HomeAppliance)", isOn: $appModel.meshFilterHomeAppliance)
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                        Toggle("テレビ (TV)", isOn: $appModel.meshFilterTV)
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                        Toggle("植物 (Plant)", isOn: $appModel.meshFilterPlant)
                             .toggleStyle(.switch)
                             .controlSize(.small)
                         Toggle("その他 (Other)", isOn: $appModel.meshFilterOther)
@@ -324,6 +342,81 @@ struct ContentView: View {
                             get: { mediaVM.videoRotationV },
                             set: { mediaVM.videoRotationV = $0 }
                         ), in: -90...90, step: 5)
+                    }
+
+                    // Vertical bob controls
+                    Toggle("上下運動", isOn: Binding(
+                        get: { mediaVM.videoBobEnabled },
+                        set: { mediaVM.videoBobEnabled = $0 }
+                    ))
+                    .toggleStyle(.switch)
+
+                    if mediaVM.videoBobEnabled {
+                        VStack(alignment: .leading) {
+                            Text("上下幅: \(String(format: "%.2f", mediaVM.videoBobAmplitude))m")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoBobAmplitude },
+                                set: { mediaVM.videoBobAmplitude = $0 }
+                            ), in: 0.05...1.0, step: 0.05)
+                        }
+
+                        VStack(alignment: .leading) {
+                            Text("上下スピード: \(String(format: "%.2f", mediaVM.videoBobSpeed))Hz")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoBobSpeed },
+                                set: { mediaVM.videoBobSpeed = $0 }
+                            ), in: 0.02...0.5, step: 0.02)
+                        }
+                    }
+
+                    // Forward/back surge controls
+                    Toggle("前後運動", isOn: Binding(
+                        get: { mediaVM.videoSurgeEnabled },
+                        set: { mediaVM.videoSurgeEnabled = $0 }
+                    ))
+                    .toggleStyle(.switch)
+
+                    if mediaVM.videoSurgeEnabled {
+                        VStack(alignment: .leading) {
+                            Text("前後幅: \(String(format: "%.2f", mediaVM.videoSurgeAmplitude))m")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoSurgeAmplitude },
+                                set: { mediaVM.videoSurgeAmplitude = $0 }
+                            ), in: 0.05...1.0, step: 0.05)
+                        }
+
+                        VStack(alignment: .leading) {
+                            Text("前後スピード: \(String(format: "%.2f", mediaVM.videoSurgeSpeed))Hz")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoSurgeSpeed },
+                                set: { mediaVM.videoSurgeSpeed = $0 }
+                            ), in: 0.02...0.5, step: 0.02)
+                        }
+                    }
+
+                    // Left/right sway controls
+                    Toggle("左右運動", isOn: Binding(
+                        get: { mediaVM.videoSwayEnabled },
+                        set: { mediaVM.videoSwayEnabled = $0 }
+                    ))
+                    .toggleStyle(.switch)
+
+                    if mediaVM.videoSwayEnabled {
+                        VStack(alignment: .leading) {
+                            Text("左右幅: \(String(format: "%.2f", mediaVM.videoSwayAmplitude))m")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoSwayAmplitude },
+                                set: { mediaVM.videoSwayAmplitude = $0 }
+                            ), in: 0.05...1.0, step: 0.05)
+                        }
+
+                        VStack(alignment: .leading) {
+                            Text("左右スピード: \(String(format: "%.2f", mediaVM.videoSwaySpeed))Hz")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoSwaySpeed },
+                                set: { mediaVM.videoSwaySpeed = $0 }
+                            ), in: 0.02...0.5, step: 0.02)
+                        }
                     }
 
                 }

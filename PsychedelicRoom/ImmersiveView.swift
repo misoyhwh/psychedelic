@@ -14,6 +14,11 @@ struct ImmersiveView: View {
     @State private var videoRootEntity = Entity()
     @State private var videoEntity: ModelEntity?
     @State private var videoInitialScale: Float = 1.0
+    @State private var videoBobBaseY: Float = 1.5
+    @State private var videoSurgeBaseZ: Float = -2.0
+    @State private var videoSwayBaseX: Float = 0.0
+    @State private var videoMotionTimer: Timer?
+    @State private var videoMotionStartTime: Date?
 
     // Slideshow panel entities
     @State private var slideshowRootEntity = Entity()
@@ -44,6 +49,9 @@ struct ImmersiveView: View {
             let _ = mediaVM.videoEnabled
             let _ = mediaVM.videoRotationH
             let _ = mediaVM.videoRotationV
+            let _ = mediaVM.videoBobEnabled
+            let _ = mediaVM.videoSurgeEnabled
+            let _ = mediaVM.videoSwayEnabled
             let _ = mediaVM.slideshowTextureVersion
             let _ = mediaVM.slideshowEnabled
             let _ = mediaVM.slideshowRotationH
@@ -61,11 +69,17 @@ struct ImmersiveView: View {
                 var f: Set<MeshAnchor.MeshClassification> = []
                 if appModel.meshFilterWall { f.insert(.wall) }
                 if appModel.meshFilterFloor { f.insert(.floor) }
+                if appModel.meshFilterStairs { f.insert(.stairs) }
+                if appModel.meshFilterBed { f.insert(.bed) }
                 if appModel.meshFilterCeiling { f.insert(.ceiling) }
                 if appModel.meshFilterTable { f.insert(.table) }
                 if appModel.meshFilterSeat { f.insert(.seat) }
+                if appModel.meshFilterCabinet { f.insert(.cabinet) }
                 if appModel.meshFilterWindow { f.insert(.window) }
                 if appModel.meshFilterDoor { f.insert(.door) }
+                if appModel.meshFilterHomeAppliance { f.insert(.homeAppliance) }
+                if appModel.meshFilterTV { f.insert(.tv) }
+                if appModel.meshFilterPlant { f.insert(.plant) }
                 if appModel.meshFilterOther { f.insert(.none) }
                 filter = f
             } else {
@@ -128,6 +142,15 @@ struct ImmersiveView: View {
         .onChange(of: mediaVM.videoRotationV) {
             updateVideoRotation()
         }
+        .onChange(of: mediaVM.videoBobEnabled) {
+            updateVideoMotion()
+        }
+        .onChange(of: mediaVM.videoSurgeEnabled) {
+            updateVideoMotion()
+        }
+        .onChange(of: mediaVM.videoSwayEnabled) {
+            updateVideoMotion()
+        }
         // MARK: - Slideshow panel onChange handlers
         .onChange(of: mediaVM.slideshowTextureVersion) {
             recreateSlideshowEntity()
@@ -180,6 +203,41 @@ struct ImmersiveView: View {
         let yaw = simd_quatf(angle: mediaVM.videoRotationH * .pi / 180, axis: [0, 1, 0])
         let pitch = simd_quatf(angle: mediaVM.videoRotationV * .pi / 180, axis: [1, 0, 0])
         videoRootEntity.orientation = yaw * pitch
+    }
+
+    private func updateVideoMotion() {
+        videoMotionTimer?.invalidate()
+        videoMotionTimer = nil
+        videoMotionStartTime = nil
+
+        let bobEnabled = mediaVM.videoBobEnabled
+        let surgeEnabled = mediaVM.videoSurgeEnabled
+        let swayEnabled = mediaVM.videoSwayEnabled
+
+        if bobEnabled || surgeEnabled || swayEnabled {
+            if bobEnabled { videoBobBaseY = videoRootEntity.position.y }
+            if surgeEnabled { videoSurgeBaseZ = videoRootEntity.position.z }
+            if swayEnabled { videoSwayBaseX = videoRootEntity.position.x }
+            let startTime = Date()
+            videoMotionStartTime = startTime
+            videoMotionTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [self] _ in
+                Task { @MainActor in
+                    let elapsed = Float(Date().timeIntervalSince(startTime))
+                    if mediaVM.videoBobEnabled {
+                        let offsetY = sin(elapsed * mediaVM.videoBobSpeed * 2 * .pi) * mediaVM.videoBobAmplitude
+                        videoRootEntity.position.y = videoBobBaseY + offsetY
+                    }
+                    if mediaVM.videoSurgeEnabled {
+                        let offsetZ = sin(elapsed * mediaVM.videoSurgeSpeed * 2 * .pi) * mediaVM.videoSurgeAmplitude
+                        videoRootEntity.position.z = videoSurgeBaseZ + offsetZ
+                    }
+                    if mediaVM.videoSwayEnabled {
+                        let offsetX = sin(elapsed * mediaVM.videoSwaySpeed * 2 * .pi) * mediaVM.videoSwayAmplitude
+                        videoRootEntity.position.x = videoSwayBaseX + offsetX
+                    }
+                }
+            }
+        }
     }
 
     // MARK: - Slideshow Entity

@@ -43,13 +43,15 @@ class SceneReconstructor {
     private var lastSplitMode: Bool = false
 
     private static let ceilingClassifications: Set<MeshAnchor.MeshClassification> = [.ceiling]
-    private static let floorClassifications: Set<MeshAnchor.MeshClassification> = [.floor]
-    private static let otherClassifications: Set<MeshAnchor.MeshClassification> = [.wall, .table, .seat, .window, .door, .none]
+    private static let floorClassifications: Set<MeshAnchor.MeshClassification> = [.floor, .stairs, .bed]
+    private static let otherClassifications: Set<MeshAnchor.MeshClassification> = [.wall, .cabinet, .table, .seat, .window, .door, .homeAppliance, .tv, .plant, .none]
 
     /// Whether entities need to be split by classification (ceiling/floor/other)
     private var isVideoPattern: Bool {
         style == .videoPsychedelic || style == .videoInterference || style == .videoRainbow || style == .videoAurora
     }
+
+    private var isOcclusionMode: Bool { style == .occlusion }
 
     private var splitMode: Bool {
         videoColorMode || isVideoPattern
@@ -163,7 +165,7 @@ class SceneReconstructor {
 
     private func createMeshEntity(from anchor: MeshAnchor) async throws -> ModelEntity {
         let meshResource = try await generateMeshResource(from: anchor, filter: classificationFilter)
-        let material = getOrCreateMaterial()
+        let material: any RealityKit.Material = isOcclusionMode ? OcclusionMaterial() : getOrCreateMaterial()
         let entity = ModelEntity(mesh: meshResource, materials: [material])
         entity.transform = Transform(matrix: anchor.originFromAnchorTransform)
         return entity
@@ -407,6 +409,7 @@ class SceneReconstructor {
         case .videoInterference: return 13
         case .videoRainbow: return 14
         case .videoAurora: return 15
+        case .occlusion: return -1
         }
     }
 
@@ -470,6 +473,15 @@ class SceneReconstructor {
     }
 
     private func updateMaterials() {
+        if isOcclusionMode {
+            let material = OcclusionMaterial()
+            for entity in meshEntities.values { entity.model?.materials = [material] }
+            for entity in ceilingEntities.values { entity.model?.materials = [material] }
+            for entity in floorEntities.values { entity.model?.materials = [material] }
+            for entity in otherEntities.values { entity.model?.materials = [material] }
+            return
+        }
+
         if videoColorMode {
             // Video color mode: solid colors, no texture
             let ceilingMat = createSplitMaterial(color: videoColorTop)

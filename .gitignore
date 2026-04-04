@@ -13,6 +13,10 @@ DerivedData/
 # Swift Package Manager
 .build/
 Packages/*/.build/
+Packages/*/.swiftpm/
+
+# Unity
+Unity/
 
 # Claude Code
 .claude/
