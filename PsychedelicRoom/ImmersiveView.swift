@@ -47,6 +47,7 @@ struct ImmersiveView: View {
             // (ensures onChange handlers fire reliably)
             let _ = mediaVM.videoVersion
             let _ = mediaVM.videoEnabled
+            let _ = mediaVM.isVideoPlaying
             let _ = mediaVM.videoRotationH
             let _ = mediaVM.videoRotationV
             let _ = mediaVM.videoBobEnabled

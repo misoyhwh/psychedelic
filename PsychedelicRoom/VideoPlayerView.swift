@@ -8,7 +8,15 @@ import RealityKitContent
 @MainActor
 class MediaPanelViewModel {
     // MARK: - Video Panel
+
+    enum VideoSourceMode: String, CaseIterable, Identifiable {
+        case localFile = "Local File"
+        case serverSearch = "Server Search"
+        var id: String { rawValue }
+    }
+
     var videoEnabled: Bool = false
+    var videoSourceMode: VideoSourceMode = .localFile
     var videoURL: URL? = nil
     var isVideoPlaying: Bool = false
     var videoSize: CGSize = CGSize(width: 1.92, height: 1.08)
@@ -29,6 +37,17 @@ class MediaPanelViewModel {
     var videoDuration: Double = 0
     var isSeeking: Bool = false
 
+    // Server video playlist state
+    var videoPlaylist: [IllustServerAsset] = []
+    var videoPlaylistIndex: Int = 0
+    var videoServerSearchInProgress: Bool = false
+    var videoServerSearchError: String? = nil
+    var videoServerTotalCount: Int = 0
+    var videoServerLastTags: String = ""
+    private var videoServerSearchTask: Task<Void, Never>?
+    /// 直近の検索で使った client を保持。プレイリスト遷移時に mediaURL を組み立てるため。
+    private var videoServerClient: IllustServerClient?
+
     // Video color sampling
     var videoColorTop: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
     var videoColorMiddle: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
@@ -39,6 +58,15 @@ class MediaPanelViewModel {
     private var loopObserver: Any?
     private var timeObserver: Any?
     private var videoOutput: AVPlayerItemVideoOutput?
+    /// AVPlayerItem.status を KVO で監視するための保持枠 (HTTP 動画は loadVideo 直後は .unknown のため、
+    /// .readyToPlay 後に play() を呼ぶ)
+    private var itemStatusObservation: NSKeyValueObservation?
+    /// アイテム未準備の間に playVideo が呼ばれたら true。準備完了 KVO で発火させる。
+    private var pendingAutoplay: Bool = false
+    /// player が ready になったか (KVO 発火後 true)。
+    private var itemReadyForEntity: Bool = false
+    /// 動画サイズが取得できたか (loadVideoSize 完了後 true)。
+    private var sizeReadyForEntity: Bool = false
 
     // Slideshow color sampling
     var slideshowColorTop: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
@@ -95,6 +123,10 @@ class MediaPanelViewModel {
         // Clean up old player BEFORE creating new one
         cleanupPlayer()
 
+        // Reset entity-creation gating flags for the new video
+        itemReadyForEntity = false
+        sizeReadyForEntity = false
+
         videoURL = url
         let item = AVPlayerItem(url: url)
 
@@ -108,14 +140,43 @@ class MediaPanelViewModel {
 
         let newPlayer = AVPlayer(playerItem: item)
 
-        // Loop observer
+        // End-of-playback observer: Local モードはループ、Server モードは次の動画へ
         loopObserver = NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
             object: item,
             queue: .main
-        ) { [weak newPlayer] _ in
-            newPlayer?.seek(to: .zero)
-            newPlayer?.play()
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.onVideoEnded()
+            }
+        }
+
+        // AVPlayerItem.status KVO: HTTP 動画は作成直後 .unknown のため、
+        // .readyToPlay 後に保留中の autoplay を発火させる。
+        // .failed の場合は Server プレイリストなら次へスキップ。
+        itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            Task { @MainActor in
+                guard let self else { return }
+                switch item.status {
+                case .readyToPlay:
+                    if self.pendingAutoplay {
+                        self.player?.playImmediately(atRate: 1.0)
+                        self.isVideoPlaying = true
+                        self.pendingAutoplay = false
+                    }
+                    // ready になったので entity 作成条件を更新
+                    self.itemReadyForEntity = true
+                    self.tryCreateVideoEntity()
+                case .failed:
+                    print("Video item failed: \(item.error?.localizedDescription ?? "unknown")")
+                    self.pendingAutoplay = false
+                    if self.videoSourceMode == .serverSearch && !self.videoPlaylist.isEmpty {
+                        self.videoPlaylistNext()
+                    }
+                default:
+                    break
+                }
+            }
         }
 
         // Time observer for seek bar
@@ -136,14 +197,20 @@ class MediaPanelViewModel {
         // Set player AFTER observers are configured
         self.player = newPlayer
 
-        // Immediately signal entity creation with default 16:9 size
-        videoVersion += 1
-
-        // Then update size asynchronously and recreate with correct aspect ratio
+        // entity は item.status == .readyToPlay && サイズ取得完了 の両方が揃った時点で作る。
+        // ここでは bump しない (古い entity は次の作成タイミングまで残るが、それで OK)。
         Task {
             await loadVideoSize(from: item)
-            videoVersion += 1
+            sizeReadyForEntity = true
+            tryCreateVideoEntity()
         }
+    }
+
+    /// player が ready かつ サイズ取得済みのときだけ videoVersion を bump して entity を 1 回だけ作り直す。
+    /// 中途半端な状態で entity を作ると VideoMaterial がフレームを描画してくれないため。
+    private func tryCreateVideoEntity() {
+        guard itemReadyForEntity, sizeReadyForEntity else { return }
+        videoVersion += 1
     }
 
     private func cleanupPlayer() {
@@ -165,32 +232,135 @@ class MediaPanelViewModel {
         }
         loopObserver = nil
 
+        // Invalidate item-status KVO
+        itemStatusObservation?.invalidate()
+        itemStatusObservation = nil
+        pendingAutoplay = false
+
         // Stop old player
         player?.pause()
         player = nil
         isVideoPlaying = false
     }
 
+    @MainActor
+    private func onVideoEnded() {
+        if videoSourceMode == .serverSearch && !videoPlaylist.isEmpty {
+            // 次の動画へ自動切替
+            videoPlaylistNext()
+        } else {
+            // Local: 同じ動画をループ
+            player?.seek(to: .zero)
+            player?.play()
+        }
+    }
+
     func playVideo() {
-        player?.play()
-        isVideoPlaying = true
+        // アイテム未準備なら autoplay フラグを立てて KVO に任せる。
+        // (HTTP 動画は loadVideo 直後 .unknown 状態で、play() を呼んでも実際の再生が走らない場合がある)
+        if let item = player?.currentItem, item.status == .readyToPlay {
+            player?.playImmediately(atRate: 1.0)
+            isVideoPlaying = true
+            pendingAutoplay = false
+        } else {
+            pendingAutoplay = true
+            isVideoPlaying = true  // 意図表示のため即時更新 (実再生は ready 後)
+        }
     }
 
     func pauseVideo() {
         player?.pause()
         isVideoPlaying = false
+        pendingAutoplay = false
     }
 
     func stopVideo() {
         player?.pause()
         player?.seek(to: .zero)
         isVideoPlaying = false
+        pendingAutoplay = false
         videoCurrentTime = 0
     }
 
     func seekVideo(to seconds: Double) {
         let time = CMTime(seconds: seconds, preferredTimescale: 600)
         player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    // MARK: - Video Server Playlist
+
+    /// illust-server からタグ検索で動画プレイリストを構築し、先頭から再生開始。
+    func loadVideoPlaylistFromServer(host: String, tags: [String], ratings: [String]) {
+        videoServerSearchTask?.cancel()
+
+        guard let client = IllustServerClient.from(host: host) else {
+            videoServerSearchError = "サーバ URL が無効です"
+            return
+        }
+        videoServerClient = client
+
+        videoServerSearchInProgress = true
+        videoServerSearchError = nil
+        videoServerLastTags = tags.joined(separator: ", ")
+
+        videoServerSearchTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let assets = try await self.fetchAllAssets(
+                    client: client,
+                    tags: tags,
+                    ratings: ratings,
+                    mediaType: "video",
+                    cap: 500
+                )
+                if Task.isCancelled { return }
+                self.videoPlaylist = assets
+                self.videoPlaylistIndex = 0
+                self.videoServerTotalCount = assets.count
+                self.videoServerSearchInProgress = false
+                if !assets.isEmpty {
+                    self.loadCurrentPlaylistVideo()
+                }
+            } catch let e as IllustServerError {
+                if !Task.isCancelled {
+                    self.videoServerSearchError = e.errorDescription
+                    self.videoServerSearchInProgress = false
+                }
+            } catch {
+                if !Task.isCancelled {
+                    self.videoServerSearchError = error.localizedDescription
+                    self.videoServerSearchInProgress = false
+                }
+            }
+        }
+    }
+
+    func videoPlaylistNext() {
+        guard !videoPlaylist.isEmpty else { return }
+        videoPlaylistIndex = (videoPlaylistIndex + 1) % videoPlaylist.count
+        loadCurrentPlaylistVideo()
+    }
+
+    func videoPlaylistPrev() {
+        guard !videoPlaylist.isEmpty else { return }
+        videoPlaylistIndex = (videoPlaylistIndex - 1 + videoPlaylist.count) % videoPlaylist.count
+        loadCurrentPlaylistVideo()
+    }
+
+    func videoPlaylistJump(by offset: Int) {
+        guard !videoPlaylist.isEmpty else { return }
+        let count = videoPlaylist.count
+        videoPlaylistIndex = ((videoPlaylistIndex + offset) % count + count) % count
+        loadCurrentPlaylistVideo()
+    }
+
+    private func loadCurrentPlaylistVideo() {
+        guard videoPlaylistIndex < videoPlaylist.count,
+              let client = videoServerClient else { return }
+        let asset = videoPlaylist[videoPlaylistIndex]
+        let url = client.mediaURL(hash: asset.hash)
+        loadVideo(url: url)
+        playVideo()
     }
 
     private func loadVideoSize(from item: AVPlayerItem) async {
@@ -335,6 +505,7 @@ class MediaPanelViewModel {
                     client: client,
                     tags: tags,
                     ratings: ratings,
+                    mediaType: "image",
                     cap: 2000
                 )
                 if Task.isCancelled { return }
@@ -364,10 +535,12 @@ class MediaPanelViewModel {
     }
 
     /// limit を超えるまで /api/search をページングして集める。cap で上限を切る。
+    /// mediaType は "image" or "video"。
     private func fetchAllAssets(
         client: IllustServerClient,
         tags: [String],
         ratings: [String],
+        mediaType: String,
         cap: Int
     ) async throws -> [IllustServerAsset] {
         var results: [IllustServerAsset] = []
@@ -378,7 +551,7 @@ class MediaPanelViewModel {
             let resp = try await client.search(
                 tags: tags,
                 ratings: ratings,
-                mediaType: "image",
+                mediaType: mediaType,
                 limit: pageSize,
                 offset: offset
             )

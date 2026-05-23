@@ -384,26 +384,69 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                // File picker button
-                Button {
-                    showVideoFilePicker = true
-                } label: {
-                    Label(mediaVM.videoURL != nil ? mediaVM.videoURL!.lastPathComponent : "動画ファイルを選択",
-                          systemImage: "folder")
-                }
-                .buttonStyle(.bordered)
-                .fileImporter(
-                    isPresented: $showVideoFilePicker,
-                    allowedContentTypes: [.movie, .video, .mpeg4Movie, .quickTimeMovie],
-                    allowsMultipleSelection: false
-                ) { result in
-                    if case .success(let urls) = result, let url = urls.first {
-                        mediaVM.loadVideo(url: url)
-                        mediaVM.playVideo()
+                // Source mode picker (Local File / Server Search)
+                Picker("Source", selection: Binding(
+                    get: { mediaVM.videoSourceMode },
+                    set: { mediaVM.videoSourceMode = $0 }
+                )) {
+                    ForEach(MediaPanelViewModel.VideoSourceMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
                     }
+                }
+                .pickerStyle(.segmented)
+
+                if mediaVM.videoSourceMode == .localFile {
+                    // File picker button
+                    Button {
+                        showVideoFilePicker = true
+                    } label: {
+                        Label(mediaVM.videoURL != nil ? mediaVM.videoURL!.lastPathComponent : "動画ファイルを選択",
+                              systemImage: "folder")
+                    }
+                    .buttonStyle(.bordered)
+                    .fileImporter(
+                        isPresented: $showVideoFilePicker,
+                        allowedContentTypes: [.movie, .video, .mpeg4Movie, .quickTimeMovie],
+                        allowsMultipleSelection: false
+                    ) { result in
+                        if case .success(let urls) = result, let url = urls.first {
+                            mediaVM.loadVideo(url: url)
+                            mediaVM.playVideo()
+                        }
+                    }
+                } else {
+                    videoServerSearchControls
                 }
 
                 if mediaVM.player != nil {
+                    // Playlist navigation (Server mode only)
+                    if mediaVM.videoSourceMode == .serverSearch && !mediaVM.videoPlaylist.isEmpty {
+                        Text("\(mediaVM.videoPlaylistIndex + 1) / \(mediaVM.videoPlaylist.count) 本")
+                            .font(.caption)
+
+                        HStack(spacing: 8) {
+                            Button { mediaVM.videoPlaylistJump(by: -10) } label: {
+                                Text("-10").font(.caption2)
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button { mediaVM.videoPlaylistPrev() } label: {
+                                Image(systemName: "backward.fill")
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button { mediaVM.videoPlaylistNext() } label: {
+                                Image(systemName: "forward.fill")
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button { mediaVM.videoPlaylistJump(by: 10) } label: {
+                                Text("+10").font(.caption2)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+
                     // Playback controls
                     HStack(spacing: 16) {
                         Button {
@@ -691,6 +734,83 @@ struct ContentView: View {
             }
         }
     }
+    // MARK: - Video Server Search Controls
+
+    @MainActor
+    private var videoServerSearchControls: some View {
+        @Bindable var appModel = appModel
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("タグ (スライドショーと共有)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextField("例: character:frieren, rating:safe", text: $appModel.illustServerLastTags)
+                .textFieldStyle(.roundedBorder)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+            HStack(spacing: 4) {
+                Button {
+                    openWindow(id: "TagPickerWindow")
+                } label: {
+                    Label("タグ一覧", systemImage: "tag")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Spacer()
+
+                ForEach(["safe", "questionable", "explicit"], id: \.self) { r in
+                    Toggle(isOn: ratingBinding(for: r)) {
+                        Text(r).font(.caption2)
+                    }
+                    .toggleStyle(.button)
+                    .controlSize(.small)
+                }
+            }
+
+            Button {
+                triggerVideoServerSearch()
+            } label: {
+                if mediaVM.videoServerSearchInProgress {
+                    HStack {
+                        ProgressView().controlSize(.mini)
+                        Text("検索中…")
+                    }
+                } else {
+                    Label("動画をサーバ検索", systemImage: "magnifyingglass")
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(
+                appModel.illustServerHost.trimmingCharacters(in: .whitespaces).isEmpty
+                || mediaVM.videoServerSearchInProgress
+            )
+
+            if let err = mediaVM.videoServerSearchError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(3)
+            } else if !mediaVM.videoServerLastTags.isEmpty {
+                Text("検索結果: \(mediaVM.videoServerTotalCount) 本 (\(mediaVM.videoServerLastTags))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private func triggerVideoServerSearch() {
+        let tags = parseCommaList(appModel.illustServerLastTags).sorted()
+        let ratings = parseCommaList(appModel.illustServerLastRatings).sorted()
+        mediaVM.loadVideoPlaylistFromServer(
+            host: appModel.illustServerHost,
+            tags: tags,
+            ratings: ratings
+        )
+    }
+
     // MARK: - Slideshow Server Search Controls
 
     @MainActor

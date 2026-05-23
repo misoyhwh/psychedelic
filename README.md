@@ -34,8 +34,12 @@ Apple Vision Pro (visionOS) 向けの Mixed Reality アプリです。ARKit の�
 ### 動画パネル
 - Immersive 空間内に枠なしの動画パネルを配置
 - `VideoMaterial` による直接レンダリング（Spatial Video 自動対応）
+- **2 つのソースに対応**:
+  - **Local File**: ローカル動画ファイルを単独再生（自動ループ）
+  - **Server Search**: [illust-server](https://github.com/misoyhwh/illust-server) からタグ検索で動画プレイリストを構築（最大 500 件 / 検索）、終了時に自動で次の動画へ進む
 - ドラッグで位置移動、両手ピンチでサイズ変更、水平・垂直回転をスライダーで調整
-- メインUI上で再生・一時停止・停止・シークバー操作
+- メインUI上で再生・一時停止・停止・シークバー操作、プレイリスト時は前後 / ±10 ジャンプ
+- HTTP 動画の自動再生信頼性向上: `AVPlayerItem.status` を KVO で監視し `.readyToPlay` + サイズ取得完了の両方が揃ったタイミングで entity を 1 回だけ生成（チラつき無し）、`.failed` 時はプレイリスト次へ自動スキップ
 
 ### スライドショーパネル
 - **2 つのソースに対応**:
@@ -47,10 +51,11 @@ Apple Vision Pro (visionOS) 向けの Mixed Reality アプリです。ARKit の�
 - ドラッグで位置移動、両手ピンチでサイズ変更、水平・垂直回転をスライダーで調整
 
 ### Illust Server 連携
-- [illust-server](https://github.com/misoyhwh/illust-server)（Mac mini 上で稼働する Spatial Photo タグベース管理サーバー）と Tailscale 経由で接続
+- [illust-server](https://github.com/misoyhwh/illust-server)（Mac mini 上で稼働する Spatial Photo / Video タグベース管理サーバー）と Tailscale 経由で接続
 - メイン UI にサーバ URL 入力 + 接続テストボタン（緑/赤の状態ドット）
-- スライドショーの「Server Search」モードでタグ AND 検索 + rating フィルタ
-- 検索結果は自動ページングで集約（上限 2000 件）
+- **スライドショー (画像)** と **動画パネル (Spatial Video)** の両方で Server Search モードに対応
+- タグ AND 検索 + rating フィルタ、検索結果は自動ページングで集約（画像: 最大 2000 件 / 動画: 最大 500 件）
+- タグ・rating はスライドショーと動画で共有 (タグピッカーで一度選べば両方の検索に流用可能)
 - 検索条件 (タグ・rating) と接続先 URL は `UserDefaults` に永続化
 
 ### タグ選択ウィンドウ
@@ -92,7 +97,8 @@ Apple Vision Pro (visionOS) 向けの Mixed Reality アプリです。ARKit の�
 2. AVP（または開発機 Mac）でも Tailscale にサインインしておく
 3. アプリ起動 → メイン UI の「Illust Server」セクションに URL を入力（既定: `http://misoyhwhmac-mini:8080/`）
 4. 「接続テスト」ボタンで緑ドット (`接続OK`) を確認
-5. スライドショーパネル → Server Search セグメントを選択 → タグ入力 or タグ一覧ウィンドウから選択 → 「サーバ検索」
+5. **スライドショー**: パネル → Server Search セグメント → タグ入力 or タグ一覧ウィンドウから選択 → 「サーバ検索」
+6. **動画**: 動画パネル → Server Search セグメント → 同様にタグ選択 → 「動画をサーバ検索」 (タグはスライドショーと共有)
 
 > Info.plist で `NSAppTransportSecurity > NSAllowsArbitraryLoads = true` を設定しており、Tailscale 経由の HTTP 接続を許可しています（個人用途想定）。
 
