@@ -9,9 +9,10 @@ struct TagPickerView: View {
     @State private var isLoading: Bool = false
     @State private var loadError: String? = nil
     @State private var searchTask: Task<Void, Never>? = nil
+    @State private var selectedNamespace: String = "character"
 
     private let namespaces: [String] = ["character", "series", "general", "artist"]
-    private let popularPerNamespace: Int = 30
+    private let popularPerNamespace: Int = 90  // 30 → 90 (各カテゴリ 3 倍表示)
     private let gridColumns: [GridItem] = [GridItem(.adaptive(minimum: 140), spacing: 6)]
 
     var body: some View {
@@ -105,22 +106,47 @@ struct TagPickerView: View {
     }
 
     private var popularSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            ForEach(namespaces, id: \.self) { ns in
-                if let tags = popularByNamespace[ns], !tags.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(displayName(for: ns))
-                            .font(.headline)
-                        LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 6) {
-                            ForEach(tags) { tag in
-                                let key = tagKey(tag)
-                                chip(
-                                    label: "\(tag.name) (\(tag.count))",
-                                    selected: selectedSet.contains(key)
-                                ) {
-                                    toggleTag(key)
-                                }
-                            }
+        VStack(alignment: .leading, spacing: 12) {
+            // カテゴリ切替タブ
+            Picker("カテゴリ", selection: $selectedNamespace) {
+                ForEach(namespaces, id: \.self) { ns in
+                    Text(tabLabel(for: ns)).tag(ns)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            // 選択中カテゴリのタグ表示
+            let currentTags = popularByNamespace[selectedNamespace] ?? []
+            HStack {
+                Text(displayName(for: selectedNamespace))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Text("(\(currentTags.count))")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+            }
+
+            if currentTags.isEmpty {
+                if isLoading {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("読み込み中…").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("このカテゴリのタグはまだありません")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 6) {
+                    ForEach(currentTags) { tag in
+                        let key = tagKey(tag)
+                        chip(
+                            label: "\(tag.name) (\(tag.count))",
+                            selected: selectedSet.contains(key)
+                        ) {
+                            toggleTag(key)
                         }
                     }
                 }
@@ -131,6 +157,16 @@ struct TagPickerView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private func tabLabel(for ns: String) -> String {
+        switch ns {
+        case "character": return "キャラ"
+        case "series": return "シリーズ"
+        case "general": return "一般"
+        case "artist": return "作者"
+        default: return ns
         }
     }
 

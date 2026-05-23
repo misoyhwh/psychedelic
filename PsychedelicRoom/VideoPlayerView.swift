@@ -335,7 +335,7 @@ class MediaPanelViewModel {
                     client: client,
                     tags: tags,
                     ratings: ratings,
-                    cap: 1000
+                    cap: 2000
                 )
                 if Task.isCancelled { return }
 
