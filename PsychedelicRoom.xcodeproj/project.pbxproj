@@ -21,6 +21,9 @@
 		A1000012 /* VideoPlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000015 /* VideoPlayerView.swift */; };
 		A1000013 /* SlideshowEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000016 /* SlideshowEngine.swift */; };
 		A1000014 /* RealityKitContent in Frameworks */ = {isa = PBXBuildFile; productRef = AB000002 /* RealityKitContent */; };
+		A1000015 /* IllustServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000017 /* IllustServerClient.swift */; };
+		A1000016 /* TagPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000018 /* TagPickerView.swift */; };
+		A1000017 /* MemoryMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000019 /* MemoryMonitor.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +43,9 @@
 		A2000014 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A2000015 /* VideoPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlayerView.swift; sourceTree = "<group>"; };
 		A2000016 /* SlideshowEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlideshowEngine.swift; sourceTree = "<group>"; };
+		A2000017 /* IllustServerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IllustServerClient.swift; sourceTree = "<group>"; };
+		A2000018 /* TagPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagPickerView.swift; sourceTree = "<group>"; };
+		A2000019 /* MemoryMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryMonitor.swift; sourceTree = "<group>"; };
 		AB000001 /* RealityKitContent */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RealityKitContent; path = Packages/RealityKitContent; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -78,6 +84,9 @@
 				A2000013 /* BrowserView.swift */,
 				A2000015 /* VideoPlayerView.swift */,
 				A2000016 /* SlideshowEngine.swift */,
+				A2000017 /* IllustServerClient.swift */,
+				A2000018 /* TagPickerView.swift */,
+				A2000019 /* MemoryMonitor.swift */,
 				A4000004 /* Shaders */,
 				A2000008 /* Info.plist */,
 				A2000009 /* PsychedelicRoom.entitlements */,
@@ -193,6 +202,9 @@
 				A1000010 /* BrowserView.swift in Sources */,
 				A1000012 /* VideoPlayerView.swift in Sources */,
 				A1000013 /* SlideshowEngine.swift in Sources */,
+				A1000015 /* IllustServerClient.swift in Sources */,
+				A1000016 /* TagPickerView.swift in Sources */,
+				A1000017 /* MemoryMonitor.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

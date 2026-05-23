@@ -3,6 +3,62 @@ import Observation
 
 @Observable
 class AppModel {
+    // MARK: - Illust Server
+
+    enum IllustServerPingStatus {
+        case unknown
+        case checking
+        case ok(version: String)
+        case failed(message: String)
+    }
+
+    private static let illustServerHostKey = "illustServerHost"
+    private static let illustServerLastTagsKey = "illustServerLastTags"
+    private static let illustServerLastRatingsKey = "illustServerLastRatings"
+    private static let illustServerHostDefault = "http://misoyhwhmac-mini:8080/"
+
+    var illustServerHost: String = {
+        let stored = UserDefaults.standard.string(forKey: AppModel.illustServerHostKey) ?? ""
+        return stored.isEmpty ? AppModel.illustServerHostDefault : stored
+    }() {
+        didSet {
+            UserDefaults.standard.set(illustServerHost, forKey: AppModel.illustServerHostKey)
+        }
+    }
+
+    /// 最後にサーバ検索で使ったタグ (カンマ区切り保存)
+    var illustServerLastTags: String = UserDefaults.standard.string(forKey: AppModel.illustServerLastTagsKey) ?? "" {
+        didSet {
+            UserDefaults.standard.set(illustServerLastTags, forKey: AppModel.illustServerLastTagsKey)
+        }
+    }
+
+    /// 最後にサーバ検索で使った rating (カンマ区切り保存)
+    var illustServerLastRatings: String = UserDefaults.standard.string(forKey: AppModel.illustServerLastRatingsKey) ?? "safe" {
+        didSet {
+            UserDefaults.standard.set(illustServerLastRatings, forKey: AppModel.illustServerLastRatingsKey)
+        }
+    }
+
+    var illustServerPingStatus: IllustServerPingStatus = .unknown
+
+    @MainActor
+    func pingIllustServer() async {
+        illustServerPingStatus = .checking
+        guard let client = IllustServerClient.from(host: illustServerHost) else {
+            illustServerPingStatus = .failed(message: "URL が無効です")
+            return
+        }
+        do {
+            let h = try await client.health()
+            illustServerPingStatus = .ok(version: h.version ?? "?")
+        } catch let e as IllustServerError {
+            illustServerPingStatus = .failed(message: e.errorDescription ?? "通信失敗")
+        } catch {
+            illustServerPingStatus = .failed(message: error.localizedDescription)
+        }
+    }
+
     var immersiveSpaceIsShown = false
     var speed: Float = 1.0
     var intensity: Float = 1.0

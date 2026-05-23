@@ -11,6 +11,10 @@ struct ContentView: View {
 
     @State private var showVideoFilePicker = false
     @State private var showSlideshowFolderPicker = false
+    @State private var memoryMB: Double = 0
+    @State private var memoryPeakMB: Double = 0
+
+    private let memoryTimer = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         @Bindable var appModel = appModel
@@ -23,6 +27,8 @@ struct ContentView: View {
             Text("部屋をサイケデリックな模様で彩ります")
                 .font(.title3)
                 .foregroundStyle(.secondary)
+
+            memoryIndicator
 
             Divider()
 
@@ -117,6 +123,11 @@ struct ContentView: View {
                 Label("Browser", systemImage: "globe")
             }
             .buttonStyle(.bordered)
+
+            Divider()
+
+            // MARK: - Illust Server Settings
+            illustServerSection
 
             Divider()
 
@@ -242,6 +253,119 @@ struct ContentView: View {
         .padding(40)
         .frame(width: 500)
         } // ScrollView
+        .onAppear {
+            updateMemory()
+        }
+        .onReceive(memoryTimer) { _ in
+            updateMemory()
+        }
+    }
+
+    private func updateMemory() {
+        if let mb = MemoryMonitor.currentResidentMB() {
+            memoryMB = mb
+            if mb > memoryPeakMB { memoryPeakMB = mb }
+        }
+    }
+
+    @ViewBuilder
+    private var memoryIndicator: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "memorychip")
+                .imageScale(.small)
+            Text("Memory: \(memoryMB, specifier: "%.0f") MB")
+                .font(.caption)
+                .monospacedDigit()
+            Text("(peak \(memoryPeakMB, specifier: "%.0f"))")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            Spacer()
+            Button {
+                memoryPeakMB = memoryMB
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .imageScale(.small)
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .help("ピークをリセット")
+        }
+        .padding(.horizontal, 4)
+    }
+
+    // MARK: - Illust Server Settings
+
+    @MainActor
+    private var illustServerSection: some View {
+        @Bindable var appModel = appModel
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: "server.rack")
+                Text("Illust Server")
+                    .font(.headline)
+                Spacer()
+                illustServerStatusDot
+            }
+
+            TextField("http://100.x.x.x:8080", text: $appModel.illustServerHost)
+                .textFieldStyle(.roundedBorder)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+            HStack {
+                Button {
+                    Task { await appModel.pingIllustServer() }
+                } label: {
+                    Label("接続テスト", systemImage: "network")
+                }
+                .buttonStyle(.bordered)
+                .disabled(appModel.illustServerHost.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                Spacer()
+
+                illustServerStatusText
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var illustServerStatusDot: some View {
+        switch appModel.illustServerPingStatus {
+        case .unknown:
+            Circle().fill(.gray).frame(width: 10, height: 10)
+        case .checking:
+            ProgressView().controlSize(.mini)
+        case .ok:
+            Circle().fill(.green).frame(width: 10, height: 10)
+        case .failed:
+            Circle().fill(.red).frame(width: 10, height: 10)
+        }
+    }
+
+    @ViewBuilder
+    private var illustServerStatusText: some View {
+        switch appModel.illustServerPingStatus {
+        case .unknown:
+            Text("未確認")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .checking:
+            Text("確認中…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .ok(let v):
+            Text("接続OK (v\(v))")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .failed(let msg):
+            Text(msg)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .lineLimit(2)
+                .multilineTextAlignment(.trailing)
+        }
     }
 
     // MARK: - Video Panel Controls
@@ -428,7 +552,8 @@ struct ContentView: View {
 
     @MainActor
     private var slideshowPanelSection: some View {
-        VStack(spacing: 12) {
+        @Bindable var appModel = appModel
+        return VStack(spacing: 12) {
             Toggle("Slideshow Panel", isOn: Binding(
                 get: { mediaVM.slideshowEnabled },
                 set: { mediaVM.slideshowEnabled = $0 }
@@ -440,22 +565,37 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                // Folder picker button
-                Button {
-                    showSlideshowFolderPicker = true
-                } label: {
-                    Label(mediaVM.slideshowFolderURL != nil ? mediaVM.slideshowFolderURL!.lastPathComponent : "画像フォルダを選択",
-                          systemImage: "folder")
-                }
-                .buttonStyle(.bordered)
-                .fileImporter(
-                    isPresented: $showSlideshowFolderPicker,
-                    allowedContentTypes: [.folder],
-                    allowsMultipleSelection: false
-                ) { result in
-                    if case .success(let urls) = result, let url = urls.first {
-                        mediaVM.loadSlideshowFolder(url: url)
+                // Source mode picker
+                Picker("Source", selection: Binding(
+                    get: { mediaVM.slideshowSourceMode },
+                    set: { mediaVM.slideshowSourceMode = $0 }
+                )) {
+                    ForEach(MediaPanelViewModel.SlideshowSourceMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
                     }
+                }
+                .pickerStyle(.segmented)
+
+                if mediaVM.slideshowSourceMode == .localFolder {
+                    // Folder picker button
+                    Button {
+                        showSlideshowFolderPicker = true
+                    } label: {
+                        Label(mediaVM.slideshowFolderURL != nil ? mediaVM.slideshowFolderURL!.lastPathComponent : "画像フォルダを選択",
+                              systemImage: "folder")
+                    }
+                    .buttonStyle(.bordered)
+                    .fileImporter(
+                        isPresented: $showSlideshowFolderPicker,
+                        allowedContentTypes: [.folder],
+                        allowsMultipleSelection: false
+                    ) { result in
+                        if case .success(let urls) = result, let url = urls.first {
+                            mediaVM.loadSlideshowFolder(url: url)
+                        }
+                    }
+                } else {
+                    slideshowServerSearchControls
                 }
 
                 if !mediaVM.slideshowImages.isEmpty {
@@ -551,6 +691,104 @@ struct ContentView: View {
             }
         }
     }
+    // MARK: - Slideshow Server Search Controls
+
+    @MainActor
+    private var slideshowServerSearchControls: some View {
+        @Bindable var appModel = appModel
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("タグ (カンマ区切り、AND 検索)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextField("例: character:frieren, rating:safe", text: $appModel.illustServerLastTags)
+                .textFieldStyle(.roundedBorder)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+            Button {
+                openWindow(id: "TagPickerWindow")
+            } label: {
+                Label("タグ一覧から選択", systemImage: "tag")
+            }
+            .buttonStyle(.bordered)
+
+            HStack(spacing: 8) {
+                ForEach(["safe", "questionable", "explicit"], id: \.self) { r in
+                    Toggle(isOn: ratingBinding(for: r)) {
+                        Text(r).font(.caption)
+                    }
+                    .toggleStyle(.button)
+                    .controlSize(.small)
+                }
+            }
+
+            Button {
+                triggerServerSearch()
+            } label: {
+                if mediaVM.slideshowServerSearchInProgress {
+                    HStack {
+                        ProgressView().controlSize(.mini)
+                        Text("検索中…")
+                    }
+                } else {
+                    Label("サーバ検索", systemImage: "magnifyingglass")
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(
+                appModel.illustServerHost.trimmingCharacters(in: .whitespaces).isEmpty
+                || mediaVM.slideshowServerSearchInProgress
+            )
+
+            if let err = mediaVM.slideshowServerSearchError {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(3)
+            } else if !mediaVM.slideshowServerLastTags.isEmpty {
+                Text("検索結果: \(mediaVM.slideshowServerTotalCount) 件 (\(mediaVM.slideshowServerLastTags))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+    }
+
+    private func ratingBinding(for value: String) -> Binding<Bool> {
+        Binding(
+            get: {
+                let set = parseCommaList(appModel.illustServerLastRatings)
+                return set.contains(value)
+            },
+            set: { newValue in
+                var set = parseCommaList(appModel.illustServerLastRatings)
+                if newValue {
+                    set.insert(value)
+                } else {
+                    set.remove(value)
+                }
+                appModel.illustServerLastRatings = set.sorted().joined(separator: ",")
+            }
+        )
+    }
+
+    private func triggerServerSearch() {
+        let tags = parseCommaList(appModel.illustServerLastTags).sorted()
+        let ratings = parseCommaList(appModel.illustServerLastRatings).sorted()
+        mediaVM.loadSlideshowFromServer(
+            host: appModel.illustServerHost,
+            tags: tags,
+            ratings: ratings
+        )
+    }
+
+    private func parseCommaList(_ s: String) -> Set<String> {
+        Set(s.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty })
+    }
+
     // MARK: - Color Mode Controls
 
     @MainActor

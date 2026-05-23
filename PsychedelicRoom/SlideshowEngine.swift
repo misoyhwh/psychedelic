@@ -13,6 +13,8 @@ struct LoadedImageTextures {
     let rightTexture: TextureResource?
     let isStereo: Bool
     let displaySize: CGSize
+    /// 色サンプリング用の小サイズ CGImage (max 128px) — 二重ダウンロード回避のためここで作って渡す。
+    let colorSamplingImage: CGImage?
 }
 
 @MainActor
@@ -41,29 +43,79 @@ class SlideshowEngine {
         return images
     }
 
-    /// Load textures with stereo detection at load time (not at scan time)
+    /// Load textures with stereo detection at load time (not at scan time).
+    /// URL が file:// ならディスク直読み、それ以外 (http/https) は URLSession でダウンロード後にデコード。
+    /// 同じ CGImageSource から色サンプリング用サムネも作って返すので、呼び出し側で再ダウンロード不要。
     static func loadTextures(for image: SlideshowImage) async throws -> LoadedImageTextures {
-        guard let source = CGImageSourceCreateWithURL(image.url as CFURL, nil) else {
-            throw SlideshowError.imageLoadFailed
+        let source: CGImageSource
+        if image.url.isFileURL {
+            guard let s = CGImageSourceCreateWithURL(image.url as CFURL, nil) else {
+                throw SlideshowError.imageLoadFailed
+            }
+            source = s
+        } else {
+            let data = try await fetchData(from: image.url)
+            guard let s = CGImageSourceCreateWithData(data as CFData, nil) else {
+                throw SlideshowError.imageLoadFailed
+            }
+            source = s
         }
+
+        let thumb = makeColorSamplingThumbnail(from: source)
 
         // Check stereo at load time
         if let indices = stereoImageIndices(from: source),
-           let leftCG = CGImageSourceCreateImageAtIndex(source, indices.left, nil),
-           let rightCG = CGImageSourceCreateImageAtIndex(source, indices.right, nil) {
+           let leftCG = makeDisplayThumbnail(source: source, index: indices.left),
+           let rightCG = makeDisplayThumbnail(source: source, index: indices.right) {
             let leftTexture = try await TextureResource(image: leftCG, options: .init(semantic: .color))
             let rightTexture = try await TextureResource(image: rightCG, options: .init(semantic: .color))
             let size = computeDisplaySize(width: CGFloat(leftCG.width), height: CGFloat(leftCG.height))
-            return LoadedImageTextures(leftTexture: leftTexture, rightTexture: rightTexture, isStereo: true, displaySize: size)
+            return LoadedImageTextures(
+                leftTexture: leftTexture,
+                rightTexture: rightTexture,
+                isStereo: true,
+                displaySize: size,
+                colorSamplingImage: thumb
+            )
         }
 
         // Mono
-        guard let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+        guard let cgImage = makeDisplayThumbnail(source: source, index: 0) else {
             throw SlideshowError.imageLoadFailed
         }
         let texture = try await TextureResource(image: cgImage, options: .init(semantic: .color))
         let size = computeDisplaySize(width: CGFloat(cgImage.width), height: CGFloat(cgImage.height))
-        return LoadedImageTextures(leftTexture: texture, rightTexture: nil, isStereo: false, displaySize: size)
+        return LoadedImageTextures(
+            leftTexture: texture,
+            rightTexture: nil,
+            isStereo: false,
+            displaySize: size,
+            colorSamplingImage: thumb
+        )
+    }
+
+    /// 表示用に最大 `maxDisplayPixelSize` px に downsample した CGImage を返す。
+    /// 4K Spatial Photo を 4K 全解像でテクスチャ化すると GPU メモリを圧迫するので、
+    /// 物理的なパネルサイズに見合った解像度に抑える。
+    private static let maxDisplayPixelSize: Int = 2048
+
+    private static func makeDisplayThumbnail(source: CGImageSource, index: Int) -> CGImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDisplayPixelSize,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary)
+    }
+
+    private static func makeColorSamplingThumbnail(from source: CGImageSource) -> CGImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: 128,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
     // MARK: - Private
@@ -96,6 +148,33 @@ class SlideshowEngine {
         let maxDimension: CGFloat = 2.0
         let scale = min(maxDimension / width, maxDimension / height)
         return CGSize(width: width * scale, height: height * scale)
+    }
+
+    /// ephemeral session でディスク/メモリキャッシュを無効化。大量の HEIC を捌くため毎リクエスト破棄。
+    private static let httpSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 20
+        config.timeoutIntervalForResource = 60
+        config.urlCache = nil
+        config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        return URLSession(configuration: config)
+    }()
+
+    private static func fetchData(from url: URL) async throws -> Data {
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        do {
+            let (data, response) = try await httpSession.data(for: request)
+            if let http = response as? HTTPURLResponse,
+               !(200..<300).contains(http.statusCode) {
+                throw SlideshowError.imageLoadFailed
+            }
+            return data
+        } catch is SlideshowError {
+            throw SlideshowError.imageLoadFailed
+        } catch {
+            throw SlideshowError.imageLoadFailed
+        }
     }
 }
 

@@ -46,7 +46,15 @@ class MediaPanelViewModel {
     var slideshowColorBottom: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
 
     // MARK: - Slideshow Panel
+
+    enum SlideshowSourceMode: String, CaseIterable, Identifiable {
+        case localFolder = "Local Folder"
+        case serverSearch = "Server Search"
+        var id: String { rawValue }
+    }
+
     var slideshowEnabled: Bool = false
+    var slideshowSourceMode: SlideshowSourceMode = .localFolder
     var slideshowFolderURL: URL? = nil
     var slideshowImages: [SlideshowImage] = []
     var slideshowCurrentIndex: Int = 0
@@ -60,9 +68,16 @@ class MediaPanelViewModel {
     var slideshowDisplaySize: CGSize = CGSize(width: 1.92, height: 1.08)
     var slideshowTextureVersion: Int = 0
 
+    // Server search state
+    var slideshowServerSearchInProgress: Bool = false
+    var slideshowServerSearchError: String? = nil
+    var slideshowServerTotalCount: Int = 0
+    var slideshowServerLastTags: String = ""
+
     private var slideshowAccessedURL: URL?
     private var slideshowTimer: Timer?
     private var slideshowLoadTask: Task<Void, Never>?
+    private var slideshowServerSearchTask: Task<Void, Never>?
 
     // MARK: - Video Methods
 
@@ -268,6 +283,11 @@ class MediaPanelViewModel {
     // MARK: - Slideshow Methods
 
     func loadSlideshowFolder(url: URL) {
+        // Cancel any in-flight server search when switching to local
+        slideshowServerSearchTask?.cancel()
+        slideshowServerSearchTask = nil
+        slideshowServerSearchInProgress = false
+
         if let prev = slideshowAccessedURL {
             prev.stopAccessingSecurityScopedResource()
         }
@@ -285,6 +305,91 @@ class MediaPanelViewModel {
         if !images.isEmpty {
             loadCurrentSlideshowImage()
         }
+    }
+
+    /// illust-server からタグ検索で画像リストを構築する。
+    /// 既存スライドショーは置き換えられる (リモート → リモート切替時も再検索)。
+    func loadSlideshowFromServer(host: String, tags: [String], ratings: [String]) {
+        slideshowServerSearchTask?.cancel()
+
+        guard let client = IllustServerClient.from(host: host) else {
+            slideshowServerSearchError = "サーバ URL が無効です"
+            return
+        }
+
+        // Release any previously held local folder
+        if let prev = slideshowAccessedURL {
+            prev.stopAccessingSecurityScopedResource()
+            slideshowAccessedURL = nil
+        }
+        slideshowFolderURL = nil
+
+        slideshowServerSearchInProgress = true
+        slideshowServerSearchError = nil
+        slideshowServerLastTags = tags.joined(separator: ", ")
+
+        slideshowServerSearchTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let assets = try await self.fetchAllAssets(
+                    client: client,
+                    tags: tags,
+                    ratings: ratings,
+                    cap: 1000
+                )
+                if Task.isCancelled { return }
+
+                let images = assets.map { asset in
+                    SlideshowImage(url: client.mediaURL(hash: asset.hash))
+                }
+                self.slideshowImages = images
+                self.slideshowCurrentIndex = 0
+                self.slideshowServerTotalCount = images.count
+                self.slideshowServerSearchInProgress = false
+                if !images.isEmpty {
+                    self.loadCurrentSlideshowImage()
+                }
+            } catch let e as IllustServerError {
+                if !Task.isCancelled {
+                    self.slideshowServerSearchError = e.errorDescription
+                    self.slideshowServerSearchInProgress = false
+                }
+            } catch {
+                if !Task.isCancelled {
+                    self.slideshowServerSearchError = error.localizedDescription
+                    self.slideshowServerSearchInProgress = false
+                }
+            }
+        }
+    }
+
+    /// limit を超えるまで /api/search をページングして集める。cap で上限を切る。
+    private func fetchAllAssets(
+        client: IllustServerClient,
+        tags: [String],
+        ratings: [String],
+        cap: Int
+    ) async throws -> [IllustServerAsset] {
+        var results: [IllustServerAsset] = []
+        var offset = 0
+        let pageSize = 100
+        while results.count < cap {
+            if Task.isCancelled { break }
+            let resp = try await client.search(
+                tags: tags,
+                ratings: ratings,
+                mediaType: "image",
+                limit: pageSize,
+                offset: offset
+            )
+            results.append(contentsOf: resp.items)
+            if !resp.page.hasMore || resp.items.isEmpty { break }
+            offset += resp.items.count
+        }
+        if results.count > cap {
+            results = Array(results.prefix(cap))
+        }
+        return results
     }
 
     func slideshowNext() {
@@ -336,8 +441,9 @@ class MediaPanelViewModel {
 
                 guard !Task.isCancelled else { return }
 
-                // Sample colors from the image before assigning textures
-                if let cgImage = self.loadCGImage(from: image.url) {
+                // Sample colors using the small thumbnail produced by loadTextures
+                // (avoids a second download/decode of the full HEIC).
+                if let cgImage = textures.colorSamplingImage {
                     self.sampleSlideshowColors(from: cgImage)
                 }
 
@@ -359,17 +465,6 @@ class MediaPanelViewModel {
     }
 
     // MARK: - Slideshow Color Sampling
-
-    private func loadCGImage(from url: URL) -> CGImage? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        // Request a downsampled thumbnail for color sampling to reduce memory usage
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceThumbnailMaxPixelSize: 128,
-            kCGImageSourceCreateThumbnailWithTransform: true
-        ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
-    }
 
     private func sampleSlideshowColors(from cgImage: CGImage) {
         let origW = cgImage.width
