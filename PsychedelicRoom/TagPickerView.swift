@@ -1,6 +1,19 @@
 import SwiftUI
 
+enum TagPickerTarget {
+    case image
+    case video
+
+    var displayName: String {
+        switch self {
+        case .image: return "画像"
+        case .video: return "動画"
+        }
+    }
+}
+
 struct TagPickerView: View {
+    let target: TagPickerTarget
     @Environment(AppModel.self) private var appModel
 
     @State private var query: String = ""
@@ -21,7 +34,7 @@ struct TagPickerView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Image(systemName: "tag.fill")
-                Text("タグ選択")
+                Text("タグ選択 (\(target.displayName))")
                     .font(.title2)
                 Spacer()
                 if isLoading {
@@ -83,7 +96,7 @@ struct TagPickerView: View {
                 Spacer()
                 if !selectedSet.isEmpty {
                     Button("すべて解除") {
-                        appModel.illustServerLastTags = ""
+                        setCurrentTagsString("")
                     }
                     .buttonStyle(.borderless)
                     .controlSize(.small)
@@ -213,8 +226,22 @@ struct TagPickerView: View {
 
     // MARK: - State helpers
 
+    private var currentTagsString: String {
+        switch target {
+        case .image: return appModel.illustServerLastTags
+        case .video: return appModel.illustServerLastVideoTags
+        }
+    }
+
+    private func setCurrentTagsString(_ value: String) {
+        switch target {
+        case .image: appModel.illustServerLastTags = value
+        case .video: appModel.illustServerLastVideoTags = value
+        }
+    }
+
     private var selectedSet: Set<String> {
-        Set(appModel.illustServerLastTags
+        Set(currentTagsString
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
@@ -232,7 +259,7 @@ struct TagPickerView: View {
         } else {
             set.insert(key)
         }
-        appModel.illustServerLastTags = set.sorted().joined(separator: ", ")
+        setCurrentTagsString(set.sorted().joined(separator: ", "))
     }
 
     private func displayName(for ns: String) -> String {

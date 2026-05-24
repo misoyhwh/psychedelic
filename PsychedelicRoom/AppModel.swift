@@ -13,8 +13,12 @@ class AppModel {
     }
 
     private static let illustServerHostKey = "illustServerHost"
+    // 画像用 (旧キーをそのまま画像用として継続利用)
     private static let illustServerLastTagsKey = "illustServerLastTags"
     private static let illustServerLastRatingsKey = "illustServerLastRatings"
+    // 動画用
+    private static let illustServerLastVideoTagsKey = "illustServerLastVideoTags"
+    private static let illustServerLastVideoRatingsKey = "illustServerLastVideoRatings"
     private static let illustServerHostDefault = "http://misoyhwhmac-mini:8080/"
 
     var illustServerHost: String = {
@@ -26,17 +30,31 @@ class AppModel {
         }
     }
 
-    /// 最後にサーバ検索で使ったタグ (カンマ区切り保存)
+    /// 画像 (スライドショー) サーバ検索で最後に使ったタグ (カンマ区切り保存)
     var illustServerLastTags: String = UserDefaults.standard.string(forKey: AppModel.illustServerLastTagsKey) ?? "" {
         didSet {
             UserDefaults.standard.set(illustServerLastTags, forKey: AppModel.illustServerLastTagsKey)
         }
     }
 
-    /// 最後にサーバ検索で使った rating (カンマ区切り保存)
+    /// 画像 (スライドショー) サーバ検索で最後に使った rating (カンマ区切り保存)
     var illustServerLastRatings: String = UserDefaults.standard.string(forKey: AppModel.illustServerLastRatingsKey) ?? "safe" {
         didSet {
             UserDefaults.standard.set(illustServerLastRatings, forKey: AppModel.illustServerLastRatingsKey)
+        }
+    }
+
+    /// 動画 (ビデオパネル) サーバ検索で最後に使ったタグ (カンマ区切り保存)
+    var illustServerLastVideoTags: String = UserDefaults.standard.string(forKey: AppModel.illustServerLastVideoTagsKey) ?? "" {
+        didSet {
+            UserDefaults.standard.set(illustServerLastVideoTags, forKey: AppModel.illustServerLastVideoTagsKey)
+        }
+    }
+
+    /// 動画 (ビデオパネル) サーバ検索で最後に使った rating (カンマ区切り保存)
+    var illustServerLastVideoRatings: String = UserDefaults.standard.string(forKey: AppModel.illustServerLastVideoRatingsKey) ?? "safe" {
+        didSet {
+            UserDefaults.standard.set(illustServerLastVideoRatings, forKey: AppModel.illustServerLastVideoRatingsKey)
         }
     }
 

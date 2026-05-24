@@ -740,18 +740,18 @@ struct ContentView: View {
     private var videoServerSearchControls: some View {
         @Bindable var appModel = appModel
         return VStack(alignment: .leading, spacing: 8) {
-            Text("タグ (スライドショーと共有)")
+            Text("タグ (動画専用)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            TextField("例: character:frieren, rating:safe", text: $appModel.illustServerLastTags)
+            TextField("例: character:frieren, rating:safe", text: $appModel.illustServerLastVideoTags)
                 .textFieldStyle(.roundedBorder)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
 
             HStack(spacing: 4) {
                 Button {
-                    openWindow(id: "TagPickerWindow")
+                    openWindow(id: "VideoTagPickerWindow")
                 } label: {
                     Label("タグ一覧", systemImage: "tag")
                 }
@@ -761,7 +761,7 @@ struct ContentView: View {
                 Spacer()
 
                 ForEach(["safe", "questionable", "explicit"], id: \.self) { r in
-                    Toggle(isOn: ratingBinding(for: r)) {
+                    Toggle(isOn: videoRatingBinding(for: r)) {
                         Text(r).font(.caption2)
                     }
                     .toggleStyle(.button)
@@ -801,9 +801,27 @@ struct ContentView: View {
         }
     }
 
+    private func videoRatingBinding(for value: String) -> Binding<Bool> {
+        Binding(
+            get: {
+                let set = parseCommaList(appModel.illustServerLastVideoRatings)
+                return set.contains(value)
+            },
+            set: { newValue in
+                var set = parseCommaList(appModel.illustServerLastVideoRatings)
+                if newValue {
+                    set.insert(value)
+                } else {
+                    set.remove(value)
+                }
+                appModel.illustServerLastVideoRatings = set.sorted().joined(separator: ",")
+            }
+        )
+    }
+
     private func triggerVideoServerSearch() {
-        let tags = parseCommaList(appModel.illustServerLastTags).sorted()
-        let ratings = parseCommaList(appModel.illustServerLastRatings).sorted()
+        let tags = parseCommaList(appModel.illustServerLastVideoTags).sorted()
+        let ratings = parseCommaList(appModel.illustServerLastVideoRatings).sorted()
         mediaVM.loadVideoPlaylistFromServer(
             host: appModel.illustServerHost,
             tags: tags,
@@ -827,7 +845,7 @@ struct ContentView: View {
                 .autocorrectionDisabled()
 
             Button {
-                openWindow(id: "TagPickerWindow")
+                openWindow(id: "ImageTagPickerWindow")
             } label: {
                 Label("タグ一覧から選択", systemImage: "tag")
             }
