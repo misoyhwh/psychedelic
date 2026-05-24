@@ -2,6 +2,7 @@ import RealityKit
 import ARKit
 import SwiftUI
 import QuartzCore
+import Metal
 
 @Observable
 @MainActor
@@ -346,38 +347,75 @@ class SceneReconstructor {
     private func generateMeshResource(from anchor: MeshAnchor, filter: Set<MeshAnchor.MeshClassification>?) async throws -> MeshResource {
         let meshGeometry = anchor.geometry
 
-        // Read all positions
+        // ----- 重要 -----
+        // 以下のスカラー値 (count / stride / offset) とバッファコンテンツポインタは
+        // ループに入る前に必ずローカル変数にスナップショットすること。
+        // ループ内で `vertices.stride` のような Objective-C 呼び出しを繰り返すと、
+        // ARKit が裏で MeshAnchor の MTLBuffer を再利用したタイミングで
+        // ARGeometrySource が dangling pointer になり EXC_BAD_ACCESS でクラッシュする。
+        // バッファ参照 (`vertexBuffer` 等) も関数スコープで保持して途中解放を防ぐ。
+
+        // Vertices snapshot
         let vertices = meshGeometry.vertices
-        let positionData = vertices.buffer.contents()
+        let vertexCount = vertices.count
+        let vertexStride = vertices.stride
+        let vertexOffset = vertices.offset
+        let vertexBuffer = vertices.buffer
+        let vertexContents = vertexBuffer.contents()
         var allPositions: [SIMD3<Float>] = []
-        for i in 0..<vertices.count {
-            let pointer = positionData.advanced(by: vertices.offset + i * vertices.stride)
+        allPositions.reserveCapacity(vertexCount)
+        for i in 0..<vertexCount {
+            let pointer = vertexContents.advanced(by: vertexOffset + i * vertexStride)
             allPositions.append(pointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee)
         }
 
-        // Read all normals
+        // Normals snapshot
         let normals = meshGeometry.normals
-        let normalData = normals.buffer.contents()
+        let normalCount = normals.count
+        let normalStride = normals.stride
+        let normalOffset = normals.offset
+        let normalBuffer = normals.buffer
+        let normalContents = normalBuffer.contents()
         var allNormals: [SIMD3<Float>] = []
-        for i in 0..<normals.count {
-            let pointer = normalData.advanced(by: normals.offset + i * normals.stride)
+        allNormals.reserveCapacity(normalCount)
+        for i in 0..<normalCount {
+            let pointer = normalContents.advanced(by: normalOffset + i * normalStride)
             allNormals.append(pointer.assumingMemoryBound(to: SIMD3<Float>.self).pointee)
         }
 
-        // Read all face indices
+        // Faces snapshot
         let faces = meshGeometry.faces
-        let faceData = faces.buffer.contents()
+        let faceCount = faces.count
         let bytesPerIndex = faces.bytesPerIndex
         let indicesPerFace = faces.primitive.indexCount
+        let faceBuffer = faces.buffer
+        let faceContents = faceBuffer.contents()
+
+        // Classifications snapshot (only if filter is active)
+        struct ClassSnapshot {
+            let contents: UnsafeMutableRawPointer
+            let offset: Int
+            let stride: Int
+            // keep buffer ref alive
+            let buffer: MTLBuffer
+        }
+        var classSnapshot: ClassSnapshot? = nil
+        if filter != nil, let classifications = meshGeometry.classifications {
+            let buf = classifications.buffer
+            classSnapshot = ClassSnapshot(
+                contents: buf.contents(),
+                offset: classifications.offset,
+                stride: classifications.stride,
+                buffer: buf
+            )
+        }
 
         // Build indices — optionally filter by classification
         var filteredIndices: [UInt32] = []
 
-        if let activeFilter = filter,
-           let classifications = meshGeometry.classifications {
-            let classData = classifications.buffer.contents()
-            for faceIndex in 0..<faces.count {
-                let classPointer = classData.advanced(by: classifications.offset + faceIndex * classifications.stride)
+        if let activeFilter = filter, let snap = classSnapshot {
+            for faceIndex in 0..<faceCount {
+                let classPointer = snap.contents.advanced(by: snap.offset + faceIndex * snap.stride)
                 let classRawValue = classPointer.assumingMemoryBound(to: UInt8.self).pointee
                 let classification = MeshAnchor.MeshClassification(rawValue: Int(classRawValue)) ?? .none
 
@@ -385,7 +423,7 @@ class SceneReconstructor {
 
                 for j in 0..<indicesPerFace {
                     let idx = faceIndex * indicesPerFace + j
-                    let pointer = faceData.advanced(by: idx * bytesPerIndex)
+                    let pointer = faceContents.advanced(by: idx * bytesPerIndex)
                     if bytesPerIndex == 4 {
                         filteredIndices.append(pointer.assumingMemoryBound(to: UInt32.self).pointee)
                     } else if bytesPerIndex == 2 {
@@ -394,8 +432,8 @@ class SceneReconstructor {
                 }
             }
         } else {
-            for i in 0..<(faces.count * indicesPerFace) {
-                let pointer = faceData.advanced(by: i * bytesPerIndex)
+            for i in 0..<(faceCount * indicesPerFace) {
+                let pointer = faceContents.advanced(by: i * bytesPerIndex)
                 if bytesPerIndex == 4 {
                     filteredIndices.append(pointer.assumingMemoryBound(to: UInt32.self).pointee)
                 } else if bytesPerIndex == 2 {
@@ -406,11 +444,15 @@ class SceneReconstructor {
 
         // Build UVs from positions
         var uvs: [SIMD2<Float>] = []
+        uvs.reserveCapacity(allPositions.count)
         for position in allPositions {
             let u = (position.x + position.z) * 0.5
             let v = (position.y + position.z) * 0.5
             uvs.append(SIMD2<Float>(u, v))
         }
+
+        // バッファ参照を最後まで保持 (ARC で解放されないように explicit に触る)
+        withExtendedLifetime((vertexBuffer, normalBuffer, faceBuffer, classSnapshot?.buffer)) {}
 
         var descriptor = MeshDescriptor(name: "SceneMesh")
         descriptor.positions = MeshBuffer(allPositions)

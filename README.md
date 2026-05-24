@@ -19,6 +19,7 @@ Apple Vision Pro (visionOS) 向けの Mixed Reality アプリです。ARKit の�
 - ARKit `SceneReconstructionProvider` で部屋のメッシュをリアルタイム取得
 - **メッシュ分類フィルター**: 壁・床・天井・テーブル・椅子・窓・ドア等をカテゴリ別に ON/OFF
 - 取得したメッシュにサイケデリックテクスチャを投影
+- 長時間稼働対策: メッシュ生成ループでは `ARGeometrySource` のスカラー値とバッファ参照を事前にローカルスナップショット + `withExtendedLifetime` でバッファ寿命を保証し、ARKit によるバッファ再利用との競合による use-after-free を防止
 
 ### 音声リアクティブ
 - **マイク入力モード**: 環境音に反応してエフェクトが変化
