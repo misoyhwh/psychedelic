@@ -158,10 +158,14 @@ final class IllustServerClient: Sendable {
     }
 
     /// タグ AND 検索。`tag` は `"namespace:name"` または `"name"`。
+    /// `after` / `before` は unix epoch (秒)、`sort` は `"posted_at_desc" | "posted_at_asc" | "added_at_desc"`。
     func search(
         tags: [String] = [],
         ratings: [String] = [],
         mediaType: String? = nil,
+        after: Int? = nil,
+        before: Int? = nil,
+        sort: String? = nil,
         limit: Int = 60,
         offset: Int = 0
     ) async throws -> IllustServerSearchResponse {
@@ -174,6 +178,15 @@ final class IllustServerClient: Sendable {
         }
         if let mt = mediaType {
             items.append(URLQueryItem(name: "media_type", value: mt))
+        }
+        if let after = after {
+            items.append(URLQueryItem(name: "after", value: String(after)))
+        }
+        if let before = before {
+            items.append(URLQueryItem(name: "before", value: String(before)))
+        }
+        if let sort = sort {
+            items.append(URLQueryItem(name: "sort", value: sort))
         }
         items.append(URLQueryItem(name: "limit", value: String(limit)))
         items.append(URLQueryItem(name: "offset", value: String(offset)))

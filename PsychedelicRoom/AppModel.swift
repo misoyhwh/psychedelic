@@ -19,6 +19,12 @@ class AppModel {
     // 動画用
     private static let illustServerLastVideoTagsKey = "illustServerLastVideoTags"
     private static let illustServerLastVideoRatingsKey = "illustServerLastVideoRatings"
+    // 日付フィルター (画像)
+    private static let illustServerImageDateSourceKey = "illustServerImageDateSource"
+    private static let illustServerImageDatePresetKey = "illustServerImageDatePreset"
+    // 日付フィルター (動画)
+    private static let illustServerVideoDateSourceKey = "illustServerVideoDateSource"
+    private static let illustServerVideoDatePresetKey = "illustServerVideoDatePreset"
     private static let illustServerHostDefault = "http://misoyhwhmac-mini:8080/"
 
     var illustServerHost: String = {
@@ -55,6 +61,34 @@ class AppModel {
     var illustServerLastVideoRatings: String = UserDefaults.standard.string(forKey: AppModel.illustServerLastVideoRatingsKey) ?? "safe" {
         didSet {
             UserDefaults.standard.set(illustServerLastVideoRatings, forKey: AppModel.illustServerLastVideoRatingsKey)
+        }
+    }
+
+    /// 画像サーバ検索の日付ソース ("posted" / "added")。DateSource の rawValue を保存。
+    var illustServerImageDateSource: String = UserDefaults.standard.string(forKey: AppModel.illustServerImageDateSourceKey) ?? "posted" {
+        didSet {
+            UserDefaults.standard.set(illustServerImageDateSource, forKey: AppModel.illustServerImageDateSourceKey)
+        }
+    }
+
+    /// 画像サーバ検索の期間ショートカット ("all" / "today" / "thisWeek" / "thisMonth" / "thisYear")。
+    var illustServerImageDatePreset: String = UserDefaults.standard.string(forKey: AppModel.illustServerImageDatePresetKey) ?? "all" {
+        didSet {
+            UserDefaults.standard.set(illustServerImageDatePreset, forKey: AppModel.illustServerImageDatePresetKey)
+        }
+    }
+
+    /// 動画サーバ検索の日付ソース ("posted" / "added")。
+    var illustServerVideoDateSource: String = UserDefaults.standard.string(forKey: AppModel.illustServerVideoDateSourceKey) ?? "posted" {
+        didSet {
+            UserDefaults.standard.set(illustServerVideoDateSource, forKey: AppModel.illustServerVideoDateSourceKey)
+        }
+    }
+
+    /// 動画サーバ検索の期間ショートカット。
+    var illustServerVideoDatePreset: String = UserDefaults.standard.string(forKey: AppModel.illustServerVideoDatePresetKey) ?? "all" {
+        didSet {
+            UserDefaults.standard.set(illustServerVideoDatePreset, forKey: AppModel.illustServerVideoDatePresetKey)
         }
     }
 

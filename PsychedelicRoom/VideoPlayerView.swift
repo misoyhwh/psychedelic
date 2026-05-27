@@ -4,6 +4,78 @@ import CoreVideo
 import RealityKit
 import RealityKitContent
 
+// MARK: - Server search date filter
+
+/// サーバ検索の日付ソース (sort 対象 / 表示意図)。
+/// 注意: illust-server の after/before フィルタは常に COALESCE(posted_at, added_at) に適用される。
+/// このため「追加日」を選んでも、フィルタは厳密には posted_at で行われる (sort だけが added_at_desc になる)。
+enum DateSource: String, CaseIterable, Identifiable, Sendable {
+    case posted
+    case added
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .posted: return "投稿日"
+        case .added: return "追加日"
+        }
+    }
+
+    /// `/api/search` の sort パラメータ値。
+    var sortValue: String {
+        switch self {
+        case .posted: return "posted_at_desc"
+        case .added: return "added_at_desc"
+        }
+    }
+}
+
+/// サーバ検索の期間ショートカット。after=<epoch> として送る。
+enum DateRangePreset: String, CaseIterable, Identifiable, Sendable {
+    case all
+    case today
+    case thisWeek
+    case thisMonth
+    case thisYear
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .all: return "すべて"
+        case .today: return "今日"
+        case .thisWeek: return "今週"
+        case .thisMonth: return "今月"
+        case .thisYear: return "今年"
+        }
+    }
+
+    /// 期間開始時刻 (00:00) の unix epoch (秒) を返す。.all は nil。
+    func afterEpoch(from now: Date = Date(), calendar: Calendar = .current) -> Int? {
+        switch self {
+        case .all:
+            return nil
+        case .today:
+            let start = calendar.startOfDay(for: now)
+            return Int(start.timeIntervalSince1970)
+        case .thisWeek:
+            // weekOfYear 単位の startOfDay
+            let comps = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: now)
+            guard let start = calendar.date(from: comps) else { return nil }
+            return Int(start.timeIntervalSince1970)
+        case .thisMonth:
+            let comps = calendar.dateComponents([.year, .month], from: now)
+            guard let start = calendar.date(from: comps) else { return nil }
+            return Int(start.timeIntervalSince1970)
+        case .thisYear:
+            let comps = calendar.dateComponents([.year], from: now)
+            guard let start = calendar.date(from: comps) else { return nil }
+            return Int(start.timeIntervalSince1970)
+        }
+    }
+}
+
 @Observable
 @MainActor
 class MediaPanelViewModel {
@@ -44,6 +116,8 @@ class MediaPanelViewModel {
     var videoServerSearchError: String? = nil
     var videoServerTotalCount: Int = 0
     var videoServerLastTags: String = ""
+    var videoDateSource: DateSource = .posted
+    var videoDatePreset: DateRangePreset = .all
     private var videoServerSearchTask: Task<Void, Never>?
     /// 直近の検索で使った client を保持。プレイリスト遷移時に mediaURL を組み立てるため。
     private var videoServerClient: IllustServerClient?
@@ -101,6 +175,8 @@ class MediaPanelViewModel {
     var slideshowServerSearchError: String? = nil
     var slideshowServerTotalCount: Int = 0
     var slideshowServerLastTags: String = ""
+    var slideshowDateSource: DateSource = .posted
+    var slideshowDatePreset: DateRangePreset = .all
 
     private var slideshowAccessedURL: URL?
     private var slideshowTimer: Timer?
@@ -290,7 +366,13 @@ class MediaPanelViewModel {
     // MARK: - Video Server Playlist
 
     /// illust-server からタグ検索で動画プレイリストを構築し、先頭から再生開始。
-    func loadVideoPlaylistFromServer(host: String, tags: [String], ratings: [String]) {
+    func loadVideoPlaylistFromServer(
+        host: String,
+        tags: [String],
+        ratings: [String],
+        after: Int? = nil,
+        sort: String? = nil
+    ) {
         videoServerSearchTask?.cancel()
 
         guard let client = IllustServerClient.from(host: host) else {
@@ -311,6 +393,8 @@ class MediaPanelViewModel {
                     tags: tags,
                     ratings: ratings,
                     mediaType: "video",
+                    after: after,
+                    sort: sort,
                     cap: 500
                 )
                 if Task.isCancelled { return }
@@ -479,7 +563,13 @@ class MediaPanelViewModel {
 
     /// illust-server からタグ検索で画像リストを構築する。
     /// 既存スライドショーは置き換えられる (リモート → リモート切替時も再検索)。
-    func loadSlideshowFromServer(host: String, tags: [String], ratings: [String]) {
+    func loadSlideshowFromServer(
+        host: String,
+        tags: [String],
+        ratings: [String],
+        after: Int? = nil,
+        sort: String? = nil
+    ) {
         slideshowServerSearchTask?.cancel()
 
         guard let client = IllustServerClient.from(host: host) else {
@@ -506,6 +596,8 @@ class MediaPanelViewModel {
                     tags: tags,
                     ratings: ratings,
                     mediaType: "image",
+                    after: after,
+                    sort: sort,
                     cap: 2000
                 )
                 if Task.isCancelled { return }
@@ -535,12 +627,14 @@ class MediaPanelViewModel {
     }
 
     /// limit を超えるまで /api/search をページングして集める。cap で上限を切る。
-    /// mediaType は "image" or "video"。
+    /// mediaType は "image" or "video"。`after` / `sort` は optional。
     private func fetchAllAssets(
         client: IllustServerClient,
         tags: [String],
         ratings: [String],
         mediaType: String,
+        after: Int? = nil,
+        sort: String? = nil,
         cap: Int
     ) async throws -> [IllustServerAsset] {
         var results: [IllustServerAsset] = []
@@ -552,6 +646,8 @@ class MediaPanelViewModel {
                 tags: tags,
                 ratings: ratings,
                 mediaType: mediaType,
+                after: after,
+                sort: sort,
                 limit: pageSize,
                 offset: offset
             )

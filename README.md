@@ -56,8 +56,10 @@ Apple Vision Pro (visionOS) 向けの Mixed Reality アプリです。ARKit の�
 - メイン UI にサーバ URL 入力 + 接続テストボタン（緑/赤の状態ドット）
 - **スライドショー (画像)** と **動画パネル (Spatial Video)** の両方で Server Search モードに対応
 - タグ AND 検索 + rating フィルタ、検索結果は自動ページングで集約（画像: 最大 2000 件 / 動画: 最大 500 件）
-- タグ・rating はスライドショーと動画で共有 (タグピッカーで一度選べば両方の検索に流用可能)
-- 検索条件 (タグ・rating) と接続先 URL は `UserDefaults` に永続化
+- **日付フィルター**: 期間ショートカット (今日 / 今週 / 今月 / 今年 / すべて) で結果を絞り込み、日付ソース (投稿日 posted_at / 追加日 added_at) でソート順を切替
+  - 注: サーバ API の `after` フィルタは常に `COALESCE(posted_at, added_at)` に適用されるため、「追加日」を選んでも厳密には posted_at で絞られる (sort は added_at_desc になる)。posted_at ≒ added_at の個人コレクションでは実用上問題なし
+- タグ / rating / 日付フィルターは画像パネルと動画パネルでそれぞれ独立した設定 (タグピッカーも別ウィンドウ)
+- 検索条件 (タグ・rating・日付ソース・期間) と接続先 URL は `UserDefaults` に永続化
 
 ### タグ選択ウィンドウ
 - 別ウィンドウでタグを視覚的に選択（メインウィンドウで毎回タイプ入力する必要なし）

@@ -769,6 +769,17 @@ struct ContentView: View {
                 }
             }
 
+            dateFilterControls(
+                source: dateSourceBinding(
+                    get: { appModel.illustServerVideoDateSource },
+                    set: { appModel.illustServerVideoDateSource = $0 }
+                ),
+                preset: datePresetBinding(
+                    get: { appModel.illustServerVideoDatePreset },
+                    set: { appModel.illustServerVideoDatePreset = $0 }
+                )
+            )
+
             Button {
                 triggerVideoServerSearch()
             } label: {
@@ -822,10 +833,14 @@ struct ContentView: View {
     private func triggerVideoServerSearch() {
         let tags = parseCommaList(appModel.illustServerLastVideoTags).sorted()
         let ratings = parseCommaList(appModel.illustServerLastVideoRatings).sorted()
+        let source = DateSource(rawValue: appModel.illustServerVideoDateSource) ?? .posted
+        let preset = DateRangePreset(rawValue: appModel.illustServerVideoDatePreset) ?? .all
         mediaVM.loadVideoPlaylistFromServer(
             host: appModel.illustServerHost,
             tags: tags,
-            ratings: ratings
+            ratings: ratings,
+            after: preset.afterEpoch(),
+            sort: source.sortValue
         )
     }
 
@@ -860,6 +875,17 @@ struct ContentView: View {
                     .controlSize(.small)
                 }
             }
+
+            dateFilterControls(
+                source: dateSourceBinding(
+                    get: { appModel.illustServerImageDateSource },
+                    set: { appModel.illustServerImageDateSource = $0 }
+                ),
+                preset: datePresetBinding(
+                    get: { appModel.illustServerImageDatePreset },
+                    set: { appModel.illustServerImageDatePreset = $0 }
+                )
+            )
 
             Button {
                 triggerServerSearch()
@@ -914,10 +940,14 @@ struct ContentView: View {
     private func triggerServerSearch() {
         let tags = parseCommaList(appModel.illustServerLastTags).sorted()
         let ratings = parseCommaList(appModel.illustServerLastRatings).sorted()
+        let source = DateSource(rawValue: appModel.illustServerImageDateSource) ?? .posted
+        let preset = DateRangePreset(rawValue: appModel.illustServerImageDatePreset) ?? .all
         mediaVM.loadSlideshowFromServer(
             host: appModel.illustServerHost,
             tags: tags,
-            ratings: ratings
+            ratings: ratings,
+            after: preset.afterEpoch(),
+            sort: source.sortValue
         )
     }
 
@@ -925,6 +955,54 @@ struct ContentView: View {
         Set(s.split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty })
+    }
+
+    // MARK: - Date Filter Controls (shared by slideshow & video)
+
+    /// 日付ソース segmented + 期間ショートカット 5 ボタンの共通 UI。
+    @ViewBuilder
+    private func dateFilterControls(source: Binding<DateSource>, preset: Binding<DateRangePreset>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("日付フィルター")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Picker("日付ソース", selection: source) {
+                ForEach(DateSource.allCases) { ds in
+                    Text(ds.displayName).tag(ds)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            HStack(spacing: 4) {
+                ForEach(DateRangePreset.allCases) { p in
+                    Button {
+                        preset.wrappedValue = p
+                    } label: {
+                        Text(p.displayName)
+                            .font(.caption2)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(preset.wrappedValue == p ? .accentColor : .secondary)
+                }
+            }
+        }
+    }
+
+    private func dateSourceBinding(get: @escaping () -> String, set: @escaping (String) -> Void) -> Binding<DateSource> {
+        Binding(
+            get: { DateSource(rawValue: get()) ?? .posted },
+            set: { set($0.rawValue) }
+        )
+    }
+
+    private func datePresetBinding(get: @escaping () -> String, set: @escaping (String) -> Void) -> Binding<DateRangePreset> {
+        Binding(
+            get: { DateRangePreset(rawValue: get()) ?? .all },
+            set: { set($0.rawValue) }
+        )
     }
 
     // MARK: - Color Mode Controls
