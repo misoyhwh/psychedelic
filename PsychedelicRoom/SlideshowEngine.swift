@@ -5,6 +5,8 @@ import CoreGraphics
 
 struct SlideshowImage {
     let url: URL
+    /// 画面に表示するファイル名 (ローカル: lastPathComponent、リモート: asset.title or short hash)。nil 時は非表示。
+    let displayName: String?
     // stereo detection is deferred to load time
 }
 
@@ -36,7 +38,7 @@ class SlideshowEngine {
         while let fileURL = enumerator.nextObject() as? URL {
             let ext = fileURL.pathExtension.lowercased()
             guard supportedExtensions.contains(ext) else { continue }
-            images.append(SlideshowImage(url: fileURL))
+            images.append(SlideshowImage(url: fileURL, displayName: fileURL.lastPathComponent))
         }
 
         images.sort { $0.url.lastPathComponent.localizedStandardCompare($1.url.lastPathComponent) == .orderedAscending }

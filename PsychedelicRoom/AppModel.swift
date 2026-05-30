@@ -64,8 +64,9 @@ class AppModel {
         }
     }
 
-    /// 画像サーバ検索の日付ソース ("posted" / "added")。DateSource の rawValue を保存。
-    var illustServerImageDateSource: String = UserDefaults.standard.string(forKey: AppModel.illustServerImageDateSourceKey) ?? "posted" {
+    /// 画像サーバ検索の並び順 ("filename" / "posted" / "added")。ServerSortOrder の rawValue を保存。
+    /// (歴史的経緯でキー名は ...DateSource のまま。既存設定との後方互換性を保つため変更しない)
+    var illustServerImageDateSource: String = UserDefaults.standard.string(forKey: AppModel.illustServerImageDateSourceKey) ?? "filename" {
         didSet {
             UserDefaults.standard.set(illustServerImageDateSource, forKey: AppModel.illustServerImageDateSourceKey)
         }
@@ -78,8 +79,8 @@ class AppModel {
         }
     }
 
-    /// 動画サーバ検索の日付ソース ("posted" / "added")。
-    var illustServerVideoDateSource: String = UserDefaults.standard.string(forKey: AppModel.illustServerVideoDateSourceKey) ?? "posted" {
+    /// 動画サーバ検索の並び順 ("filename" / "posted" / "added")。
+    var illustServerVideoDateSource: String = UserDefaults.standard.string(forKey: AppModel.illustServerVideoDateSourceKey) ?? "filename" {
         didSet {
             UserDefaults.standard.set(illustServerVideoDateSource, forKey: AppModel.illustServerVideoDateSourceKey)
         }

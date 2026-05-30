@@ -57,6 +57,7 @@ struct ImmersiveView: View {
             let _ = mediaVM.slideshowEnabled
             let _ = mediaVM.slideshowRotationH
             let _ = mediaVM.slideshowRotationV
+            let _ = mediaVM.slideshowCurveAmount
             let _ = mediaVM.videoColorTop
             let _ = mediaVM.videoColorMiddle
             let _ = mediaVM.videoColorBottom
@@ -169,6 +170,9 @@ struct ImmersiveView: View {
         .onChange(of: mediaVM.slideshowRotationV) {
             updateSlideshowRotation()
         }
+        .onChange(of: mediaVM.slideshowCurveAmount) {
+            updateSlideshowMesh()
+        }
     }
 
     // MARK: - Video Entity
@@ -202,6 +206,100 @@ struct ImmersiveView: View {
         let shouldShow = mediaVM.videoEnabled && mediaVM.player != nil
         videoRootEntity.isEnabled = shouldShow
         print("Video visibility: \(shouldShow), enabled=\(mediaVM.videoEnabled), player=\(mediaVM.player != nil)")
+    }
+
+    // MARK: - Slideshow Panel Curve
+
+    /// 既存 slideshow entity のメッシュを湾曲量に合わせて差し替える。
+    /// entity 自体は再生成しないので、スライダーで連続的に値を変えても
+    /// テクスチャの再バインドや表示の途切れが発生しない。
+    private func updateSlideshowMesh() {
+        guard let entity = slideshowEntity else { return }
+        let width = Float(mediaVM.slideshowDisplaySize.width)
+        let height = Float(mediaVM.slideshowDisplaySize.height)
+        let mesh = makeSlideshowPanelMesh(
+            width: width,
+            height: height,
+            curve: mediaVM.slideshowCurveAmount
+        )
+        entity.model?.mesh = mesh
+    }
+
+    /// curve = 0 でフラット、>0 でこちら向きの凹面、<0 で奥向きの凸面の
+    /// 円筒セクションメッシュを生成する。湾曲は水平方向のみで縦は直線。
+    private func makeSlideshowPanelMesh(width: Float, height: Float, curve: Float) -> MeshResource {
+        // ほぼ 0 ならフラットなプレーンに退避 (除算 0 回避)。
+        if abs(curve) < 0.01 {
+            return MeshResource.generatePlane(width: width, height: height)
+        }
+
+        let segmentsX = 32
+        let maxAngle: Float = .pi * 0.8           // |curve| = 1.0 のとき ~144°
+        let angleTotal = abs(curve) * maxAngle    // パネル全幅で展開する角度
+        let radius = width / angleTotal           // アーク長 = width を保つ
+
+        var positions: [SIMD3<Float>] = []
+        var normals: [SIMD3<Float>] = []
+        var uvs: [SIMD2<Float>] = []
+        positions.reserveCapacity((segmentsX + 1) * 2)
+        normals.reserveCapacity((segmentsX + 1) * 2)
+        uvs.reserveCapacity((segmentsX + 1) * 2)
+
+        let halfH = height / 2
+
+        for i in 0...segmentsX {
+            let uNorm = Float(i) / Float(segmentsX)        // 0 ... 1
+            let uCentered = uNorm - 0.5                    // -0.5 ... 0.5
+            let theta = uCentered * angleTotal             // -a/2 ... a/2
+            let x = radius * sin(theta)
+            let zMag = radius * (1 - cos(theta))
+            let z: Float
+            let normalX: Float
+            if curve > 0 {
+                // こちら向き concave: 端がユーザー側 (+z)
+                z = zMag
+                normalX = -sin(theta)
+            } else {
+                // 奥向き convex: 端が向こう側 (-z)
+                z = -zMag
+                normalX = sin(theta)
+            }
+            let normal = SIMD3<Float>(normalX, 0, cos(theta))
+
+            // top (RealityKit の generatePlane は v=1 が上、v=0 が下なので合わせる)
+            positions.append(SIMD3<Float>(x, halfH, z))
+            normals.append(normal)
+            uvs.append(SIMD2<Float>(uNorm, 1))
+            // bottom
+            positions.append(SIMD3<Float>(x, -halfH, z))
+            normals.append(normal)
+            uvs.append(SIMD2<Float>(uNorm, 0))
+        }
+
+        var indices: [UInt32] = []
+        indices.reserveCapacity(segmentsX * 6)
+        for i in 0..<segmentsX {
+            let tl = UInt32(2 * i)
+            let bl = UInt32(2 * i + 1)
+            let tr = UInt32(2 * (i + 1))
+            let br = UInt32(2 * (i + 1) + 1)
+            // CCW from +Z (user side)
+            indices.append(contentsOf: [tl, bl, tr])
+            indices.append(contentsOf: [tr, bl, br])
+        }
+
+        var descriptor = MeshDescriptor(name: "SlideshowCurvedPanel")
+        descriptor.positions = MeshBuffer(positions)
+        descriptor.normals = MeshBuffer(normals)
+        descriptor.textureCoordinates = MeshBuffer(uvs)
+        descriptor.primitives = .triangles(indices)
+
+        do {
+            return try MeshResource.generate(from: [descriptor])
+        } catch {
+            print("Failed to build curved slideshow mesh: \(error)")
+            return MeshResource.generatePlane(width: width, height: height)
+        }
     }
 
     private func updateVideoRotation() {
@@ -266,7 +364,11 @@ struct ImmersiveView: View {
         let height = Float(mediaVM.slideshowDisplaySize.height)
 
         Task {
-            let mesh = MeshResource.generatePlane(width: width, height: height)
+            let mesh = makeSlideshowPanelMesh(
+                width: width,
+                height: height,
+                curve: mediaVM.slideshowCurveAmount
+            )
             var material: RealityKit.Material
 
             if mediaVM.slideshowIsStereo, let rightTexture = mediaVM.slideshowRightTexture {

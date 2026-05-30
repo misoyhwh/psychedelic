@@ -421,6 +421,13 @@ struct ContentView: View {
                 if mediaVM.player != nil {
                     // Playlist navigation (Server mode only)
                     if mediaVM.videoSourceMode == .serverSearch && !mediaVM.videoPlaylist.isEmpty {
+                        if let name = currentVideoDisplayName, !name.isEmpty {
+                            Text(name)
+                                .font(.caption)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .foregroundStyle(.secondary)
+                        }
                         Text("\(mediaVM.videoPlaylistIndex + 1) / \(mediaVM.videoPlaylist.count) 本")
                             .font(.caption)
 
@@ -642,6 +649,13 @@ struct ContentView: View {
                 }
 
                 if !mediaVM.slideshowImages.isEmpty {
+                    if let name = currentSlideshowDisplayName, !name.isEmpty {
+                        Text(name)
+                            .font(.caption)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(.secondary)
+                    }
                     Text("\(mediaVM.slideshowCurrentIndex + 1) / \(mediaVM.slideshowImages.count) 枚")
                         .font(.caption)
 
@@ -730,10 +744,34 @@ struct ContentView: View {
                             set: { mediaVM.slideshowRotationV = $0 }
                         ), in: -90...90, step: 5)
                     }
+
+                    VStack(alignment: .leading) {
+                        Text("パネル湾曲: \(slideshowCurveLabel)")
+                        Slider(value: Binding(
+                            get: { mediaVM.slideshowCurveAmount },
+                            set: { mediaVM.slideshowCurveAmount = $0 }
+                        ), in: -1.0...1.0, step: 0.05)
+                        HStack {
+                            Text("← 奥向き").font(.caption2).foregroundStyle(.secondary)
+                            Spacer()
+                            Text("まっすぐ").font(.caption2).foregroundStyle(.secondary)
+                            Spacer()
+                            Text("こちら向き →").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
         }
     }
+
+    /// パネル湾曲スライダーの数値ラベル。0 近傍はフラット表記、それ以外は方向 + 倍率。
+    private var slideshowCurveLabel: String {
+        let v = mediaVM.slideshowCurveAmount
+        if abs(v) < 0.01 { return "まっすぐ" }
+        let pct = Int(round(abs(v) * 100))
+        return v > 0 ? "こちら向き \(pct)%" : "奥向き \(pct)%"
+    }
+
     // MARK: - Video Server Search Controls
 
     @MainActor
@@ -770,7 +808,7 @@ struct ContentView: View {
             }
 
             dateFilterControls(
-                source: dateSourceBinding(
+                sortOrder: sortOrderBinding(
                     get: { appModel.illustServerVideoDateSource },
                     set: { appModel.illustServerVideoDateSource = $0 }
                 ),
@@ -833,14 +871,14 @@ struct ContentView: View {
     private func triggerVideoServerSearch() {
         let tags = parseCommaList(appModel.illustServerLastVideoTags).sorted()
         let ratings = parseCommaList(appModel.illustServerLastVideoRatings).sorted()
-        let source = DateSource(rawValue: appModel.illustServerVideoDateSource) ?? .posted
+        let sortOrder = ServerSortOrder(rawValue: appModel.illustServerVideoDateSource) ?? .filename
         let preset = DateRangePreset(rawValue: appModel.illustServerVideoDatePreset) ?? .all
         mediaVM.loadVideoPlaylistFromServer(
             host: appModel.illustServerHost,
             tags: tags,
             ratings: ratings,
             after: preset.afterEpoch(),
-            sort: source.sortValue
+            sortOrder: sortOrder
         )
     }
 
@@ -877,7 +915,7 @@ struct ContentView: View {
             }
 
             dateFilterControls(
-                source: dateSourceBinding(
+                sortOrder: sortOrderBinding(
                     get: { appModel.illustServerImageDateSource },
                     set: { appModel.illustServerImageDateSource = $0 }
                 ),
@@ -940,14 +978,14 @@ struct ContentView: View {
     private func triggerServerSearch() {
         let tags = parseCommaList(appModel.illustServerLastTags).sorted()
         let ratings = parseCommaList(appModel.illustServerLastRatings).sorted()
-        let source = DateSource(rawValue: appModel.illustServerImageDateSource) ?? .posted
+        let sortOrder = ServerSortOrder(rawValue: appModel.illustServerImageDateSource) ?? .filename
         let preset = DateRangePreset(rawValue: appModel.illustServerImageDatePreset) ?? .all
         mediaVM.loadSlideshowFromServer(
             host: appModel.illustServerHost,
             tags: tags,
             ratings: ratings,
             after: preset.afterEpoch(),
-            sort: source.sortValue
+            sortOrder: sortOrder
         )
     }
 
@@ -957,19 +995,33 @@ struct ContentView: View {
             .filter { !$0.isEmpty })
     }
 
-    // MARK: - Date Filter Controls (shared by slideshow & video)
+    /// 現在表示中スライドショー画像の displayName (ファイル名)。範囲外は nil。
+    private var currentSlideshowDisplayName: String? {
+        let idx = mediaVM.slideshowCurrentIndex
+        guard idx >= 0, idx < mediaVM.slideshowImages.count else { return nil }
+        return mediaVM.slideshowImages[idx].displayName
+    }
 
-    /// 日付ソース segmented + 期間ショートカット 5 ボタンの共通 UI。
+    /// 現在再生中の動画プレイリスト要素の表示ラベル (作者名：ファイル名)。範囲外は nil。
+    private var currentVideoDisplayName: String? {
+        let idx = mediaVM.videoPlaylistIndex
+        guard idx >= 0, idx < mediaVM.videoPlaylist.count else { return nil }
+        return mediaVM.videoPlaylist[idx].displayName
+    }
+
+    // MARK: - Sort / Date Filter Controls (shared by slideshow & video)
+
+    /// 並び順 segmented + 期間ショートカット 5 ボタンの共通 UI。
     @ViewBuilder
-    private func dateFilterControls(source: Binding<DateSource>, preset: Binding<DateRangePreset>) -> some View {
+    private func dateFilterControls(sortOrder: Binding<ServerSortOrder>, preset: Binding<DateRangePreset>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("日付フィルター")
+            Text("並び順・期間フィルター")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
-            Picker("日付ソース", selection: source) {
-                ForEach(DateSource.allCases) { ds in
-                    Text(ds.displayName).tag(ds)
+            Picker("並び順", selection: sortOrder) {
+                ForEach(ServerSortOrder.allCases) { s in
+                    Text(s.displayName).tag(s)
                 }
             }
             .pickerStyle(.segmented)
@@ -991,9 +1043,9 @@ struct ContentView: View {
         }
     }
 
-    private func dateSourceBinding(get: @escaping () -> String, set: @escaping (String) -> Void) -> Binding<DateSource> {
+    private func sortOrderBinding(get: @escaping () -> String, set: @escaping (String) -> Void) -> Binding<ServerSortOrder> {
         Binding(
-            get: { DateSource(rawValue: get()) ?? .posted },
+            get: { ServerSortOrder(rawValue: get()) ?? .filename },
             set: { set($0.rawValue) }
         )
     }

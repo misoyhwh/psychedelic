@@ -17,8 +17,26 @@ struct IllustServerAsset: Codable, Identifiable, Sendable, Hashable {
     let frameCount: Int?
     let codec: String?
     let posterHash: String?
+    let sourceType: String?
+    let sourceId: String?
+    let sourceUserId: String?
+    let sourceUserName: String?
 
     var id: String { hash }
+
+    /// 表示用ラベル: 「作者名：ファイル名」形式。
+    /// 作者名 (`sourceUserName`) と title が両方あれば連結。
+    /// 片方しか無ければ単独で。どちらも空なら hash 12 桁の短縮形。
+    var displayName: String {
+        let userTrimmed = (sourceUserName ?? "").trimmingCharacters(in: .whitespaces)
+        let titleTrimmed = (title ?? "").trimmingCharacters(in: .whitespaces)
+        let hasUser = !userTrimmed.isEmpty
+        let hasTitle = !titleTrimmed.isEmpty
+        if hasUser, hasTitle { return "\(userTrimmed)：\(titleTrimmed)" }
+        if hasTitle { return titleTrimmed }
+        if hasUser { return userTrimmed }
+        return String(hash.prefix(12))
+    }
 
     enum CodingKeys: String, CodingKey {
         case hash
@@ -33,6 +51,10 @@ struct IllustServerAsset: Codable, Identifiable, Sendable, Hashable {
         case frameCount = "frame_count"
         case codec
         case posterHash = "poster_hash"
+        case sourceType = "source_type"
+        case sourceId = "source_id"
+        case sourceUserId = "source_user_id"
+        case sourceUserName = "source_user_name"
     }
 }
 

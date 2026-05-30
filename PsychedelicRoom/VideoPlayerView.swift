@@ -4,12 +4,15 @@ import CoreVideo
 import RealityKit
 import RealityKitContent
 
-// MARK: - Server search date filter
+// MARK: - Server search sort / filter
 
-/// サーバ検索の日付ソース (sort 対象 / 表示意図)。
+/// サーバ検索結果の並び順。`.filename` はクライアント側で `localizedStandardCompare` ソート、
+/// `.posted` / `.added` はサーバ側 sort パラメータでソートする。
+///
 /// 注意: illust-server の after/before フィルタは常に COALESCE(posted_at, added_at) に適用される。
-/// このため「追加日」を選んでも、フィルタは厳密には posted_at で行われる (sort だけが added_at_desc になる)。
-enum DateSource: String, CaseIterable, Identifiable, Sendable {
+/// 「追加日」並びを選んでも期間フィルタは厳密には posted_at 寄りで効く (個人収集物では実用上問題なし)。
+enum ServerSortOrder: String, CaseIterable, Identifiable, Sendable {
+    case filename
     case posted
     case added
 
@@ -17,14 +20,16 @@ enum DateSource: String, CaseIterable, Identifiable, Sendable {
 
     var displayName: String {
         switch self {
+        case .filename: return "ファイル名"
         case .posted: return "投稿日"
         case .added: return "追加日"
         }
     }
 
-    /// `/api/search` の sort パラメータ値。
-    var sortValue: String {
+    /// `/api/search` の sort パラメータ値。`.filename` は nil (サーバ側ソート無効 → クライアント側で並べ替え)。
+    var serverSortValue: String? {
         switch self {
+        case .filename: return nil
         case .posted: return "posted_at_desc"
         case .added: return "added_at_desc"
         }
@@ -116,7 +121,7 @@ class MediaPanelViewModel {
     var videoServerSearchError: String? = nil
     var videoServerTotalCount: Int = 0
     var videoServerLastTags: String = ""
-    var videoDateSource: DateSource = .posted
+    var videoSortOrder: ServerSortOrder = .filename
     var videoDatePreset: DateRangePreset = .all
     private var videoServerSearchTask: Task<Void, Never>?
     /// 直近の検索で使った client を保持。プレイリスト遷移時に mediaURL を組み立てるため。
@@ -164,6 +169,8 @@ class MediaPanelViewModel {
     var slideshowInterval: Float = 5.0
     var slideshowRotationH: Float = 0
     var slideshowRotationV: Float = 0
+    /// パネル湾曲量。0 = フラット、正値 = こちら向きに弧 (concave)、負値 = 奥向きに弧 (convex)。範囲は -1.0...1.0。
+    var slideshowCurveAmount: Float = 0
     var slideshowTexture: TextureResource?
     var slideshowRightTexture: TextureResource?
     var slideshowIsStereo: Bool = false
@@ -175,7 +182,7 @@ class MediaPanelViewModel {
     var slideshowServerSearchError: String? = nil
     var slideshowServerTotalCount: Int = 0
     var slideshowServerLastTags: String = ""
-    var slideshowDateSource: DateSource = .posted
+    var slideshowSortOrder: ServerSortOrder = .filename
     var slideshowDatePreset: DateRangePreset = .all
 
     private var slideshowAccessedURL: URL?
@@ -366,12 +373,13 @@ class MediaPanelViewModel {
     // MARK: - Video Server Playlist
 
     /// illust-server からタグ検索で動画プレイリストを構築し、先頭から再生開始。
+    /// `sortOrder == .filename` のときは取得後にクライアント側で `localizedStandardCompare` ソート。
     func loadVideoPlaylistFromServer(
         host: String,
         tags: [String],
         ratings: [String],
         after: Int? = nil,
-        sort: String? = nil
+        sortOrder: ServerSortOrder = .filename
     ) {
         videoServerSearchTask?.cancel()
 
@@ -388,16 +396,21 @@ class MediaPanelViewModel {
         videoServerSearchTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let assets = try await self.fetchAllAssets(
+                var assets = try await self.fetchAllAssets(
                     client: client,
                     tags: tags,
                     ratings: ratings,
                     mediaType: "video",
                     after: after,
-                    sort: sort,
+                    sort: sortOrder.serverSortValue,
                     cap: 500
                 )
                 if Task.isCancelled { return }
+                if sortOrder == .filename {
+                    assets.sort { lhs, rhs in
+                        lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
+                    }
+                }
                 self.videoPlaylist = assets
                 self.videoPlaylistIndex = 0
                 self.videoServerTotalCount = assets.count
@@ -563,12 +576,13 @@ class MediaPanelViewModel {
 
     /// illust-server からタグ検索で画像リストを構築する。
     /// 既存スライドショーは置き換えられる (リモート → リモート切替時も再検索)。
+    /// `sortOrder == .filename` のときは取得後にクライアント側で `localizedStandardCompare` ソート。
     func loadSlideshowFromServer(
         host: String,
         tags: [String],
         ratings: [String],
         after: Int? = nil,
-        sort: String? = nil
+        sortOrder: ServerSortOrder = .filename
     ) {
         slideshowServerSearchTask?.cancel()
 
@@ -597,13 +611,23 @@ class MediaPanelViewModel {
                     ratings: ratings,
                     mediaType: "image",
                     after: after,
-                    sort: sort,
+                    sort: sortOrder.serverSortValue,
                     cap: 2000
                 )
                 if Task.isCancelled { return }
 
-                let images = assets.map { asset in
-                    SlideshowImage(url: client.mediaURL(hash: asset.hash))
+                var images = assets.map { asset -> SlideshowImage in
+                    SlideshowImage(
+                        url: client.mediaURL(hash: asset.hash),
+                        displayName: asset.displayName
+                    )
+                }
+                if sortOrder == .filename {
+                    images.sort { lhs, rhs in
+                        let a = lhs.displayName ?? ""
+                        let b = rhs.displayName ?? ""
+                        return a.localizedStandardCompare(b) == .orderedAscending
+                    }
                 }
                 self.slideshowImages = images
                 self.slideshowCurrentIndex = 0
