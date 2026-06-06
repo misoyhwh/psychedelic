@@ -58,6 +58,10 @@ struct ImmersiveView: View {
             let _ = mediaVM.slideshowRotationH
             let _ = mediaVM.slideshowRotationV
             let _ = mediaVM.slideshowCurveAmount
+            let _ = mediaVM.slideshowChromaKeyEnabled
+            let _ = mediaVM.slideshowChromaKeyColor
+            let _ = mediaVM.slideshowChromaThreshold
+            let _ = mediaVM.slideshowChromaSmoothness
             let _ = mediaVM.videoColorTop
             let _ = mediaVM.videoColorMiddle
             let _ = mediaVM.videoColorBottom
@@ -172,6 +176,18 @@ struct ImmersiveView: View {
         }
         .onChange(of: mediaVM.slideshowCurveAmount) {
             updateSlideshowMesh()
+        }
+        .onChange(of: mediaVM.slideshowChromaKeyEnabled) {
+            updateSlideshowChromaKey()
+        }
+        .onChange(of: mediaVM.slideshowChromaKeyColor) {
+            updateSlideshowChromaKey()
+        }
+        .onChange(of: mediaVM.slideshowChromaThreshold) {
+            updateSlideshowChromaKey()
+        }
+        .onChange(of: mediaVM.slideshowChromaSmoothness) {
+            updateSlideshowChromaKey()
         }
     }
 
@@ -371,26 +387,25 @@ struct ImmersiveView: View {
             )
             var material: RealityKit.Material
 
-            if mediaVM.slideshowIsStereo, let rightTexture = mediaVM.slideshowRightTexture {
-                do {
-                    var stereoMaterial = try await ShaderGraphMaterial(
-                        named: "/Root/StereoImageMaterial",
-                        from: "StereoImageMaterial",
-                        in: realityKitContentBundle
-                    )
-                    try stereoMaterial.setParameter(name: "LeftImage", value: .textureResource(leftTexture))
-                    try stereoMaterial.setParameter(name: "RightImage", value: .textureResource(rightTexture))
-                    material = stereoMaterial
-                } catch {
-                    print("Failed to load stereo material: \(error)")
-                    var fallback = UnlitMaterial()
-                    fallback.color = .init(tint: .white, texture: .init(leftTexture))
-                    material = fallback
-                }
-            } else {
-                var monoMaterial = UnlitMaterial()
-                monoMaterial.color = .init(tint: .white, texture: .init(leftTexture))
-                material = monoMaterial
+            // モノ画像も同じ ShaderGraph を使う (左テクスチャを両眼に供給)。
+            // こうすることで立体視・クロマキーの経路が一本化され、
+            // 背景透過のオン/オフはマテリアルを作り直さず setParameter で切り替えられる。
+            let rightTexture = mediaVM.slideshowRightTexture ?? leftTexture
+            do {
+                var stereoMaterial = try await ShaderGraphMaterial(
+                    named: "/Root/StereoImageMaterial",
+                    from: "StereoImageMaterial",
+                    in: realityKitContentBundle
+                )
+                try stereoMaterial.setParameter(name: "LeftImage", value: .textureResource(leftTexture))
+                try stereoMaterial.setParameter(name: "RightImage", value: .textureResource(rightTexture))
+                applyChromaParameters(to: &stereoMaterial)
+                material = stereoMaterial
+            } catch {
+                print("Failed to load stereo material: \(error)")
+                var fallback = UnlitMaterial()
+                fallback.color = .init(tint: .white, texture: .init(leftTexture))
+                material = fallback
             }
 
             // Check again in case a newer update arrived while awaiting
@@ -414,6 +429,27 @@ struct ImmersiveView: View {
         let shouldShow = mediaVM.slideshowEnabled && mediaVM.slideshowTexture != nil
         slideshowRootEntity.isEnabled = shouldShow
         print("Slideshow visibility: \(shouldShow)")
+    }
+
+    // MARK: - Slideshow Chroma Key
+
+    /// 現在の chroma key 設定を ShaderGraphMaterial のパラメータへ書き込む。
+    private func applyChromaParameters(to material: inout ShaderGraphMaterial) {
+        let c = mediaVM.slideshowChromaKeyColor
+        let keyColor = CGColor(red: CGFloat(c.x), green: CGFloat(c.y), blue: CGFloat(c.z), alpha: 1)
+        try? material.setParameter(name: "KeyColor", value: .color(keyColor))
+        try? material.setParameter(name: "Threshold", value: .float(mediaVM.slideshowChromaThreshold))
+        try? material.setParameter(name: "Smoothness", value: .float(mediaVM.slideshowChromaSmoothness))
+        try? material.setParameter(name: "ChromaEnable", value: .float(mediaVM.slideshowChromaKeyEnabled ? 1.0 : 0.0))
+    }
+
+    /// 既存パネルのマテリアルを作り直さず chroma key パラメータだけ更新する。
+    /// スライダー/カラーピッカーの連続操作でも表示が途切れない。
+    private func updateSlideshowChromaKey() {
+        guard let entity = slideshowEntity,
+              var material = entity.model?.materials.first as? ShaderGraphMaterial else { return }
+        applyChromaParameters(to: &material)
+        entity.model?.materials = [material]
     }
 
     private func updateSlideshowRotation() {

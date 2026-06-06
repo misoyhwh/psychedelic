@@ -177,6 +177,15 @@ class MediaPanelViewModel {
     var slideshowDisplaySize: CGSize = CGSize(width: 1.92, height: 1.08)
     var slideshowTextureVersion: Int = 0
 
+    // Slideshow chroma key (背景透過)。立体視を保ったままキー色付近を透明化する。
+    var slideshowChromaKeyEnabled: Bool = false
+    /// キー色 (透明化したい背景色)。線形ではなく sRGB の 0...1 RGB。
+    var slideshowChromaKeyColor: SIMD3<Float> = SIMD3<Float>(0, 1, 0)
+    /// この距離以内をキー色とみなして完全透明にする (0...1)。
+    var slideshowChromaThreshold: Float = 0.4
+    /// 透明 -> 不透明へ遷移する境界の幅 (大きいほど縁がなだらか)。
+    var slideshowChromaSmoothness: Float = 0.1
+
     // Server search state
     var slideshowServerSearchInProgress: Bool = false
     var slideshowServerSearchError: String? = nil

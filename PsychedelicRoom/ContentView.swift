@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 struct ContentView: View {
@@ -757,6 +758,49 @@ struct ContentView: View {
                             Text("まっすぐ").font(.caption2).foregroundStyle(.secondary)
                             Spacer()
                             Text("こちら向き →").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+
+                    // Chroma key (背景透過)
+                    Divider()
+                    Toggle("背景透過 (クロマキー)", isOn: Binding(
+                        get: { mediaVM.slideshowChromaKeyEnabled },
+                        set: { mediaVM.slideshowChromaKeyEnabled = $0 }
+                    ))
+                    .toggleStyle(.switch)
+
+                    if mediaVM.slideshowChromaKeyEnabled {
+                        Text("立体視を保ったままキー色付近を透明化")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        ColorPicker("キー色", selection: Binding(
+                            get: {
+                                let c = mediaVM.slideshowChromaKeyColor
+                                return Color(.sRGB, red: Double(c.x), green: Double(c.y), blue: Double(c.z))
+                            },
+                            set: { newColor in
+                                let ui = UIColor(newColor)
+                                var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                                ui.getRed(&r, green: &g, blue: &b, alpha: &a)
+                                mediaVM.slideshowChromaKeyColor = SIMD3<Float>(Float(r), Float(g), Float(b))
+                            }
+                        ))
+
+                        VStack(alignment: .leading) {
+                            Text("透過範囲: \(Int(mediaVM.slideshowChromaThreshold * 100))%")
+                            Slider(value: Binding(
+                                get: { mediaVM.slideshowChromaThreshold },
+                                set: { mediaVM.slideshowChromaThreshold = $0 }
+                            ), in: 0.0...1.0, step: 0.01)
+                        }
+
+                        VStack(alignment: .leading) {
+                            Text("縁のぼかし: \(Int(mediaVM.slideshowChromaSmoothness * 100))%")
+                            Slider(value: Binding(
+                                get: { mediaVM.slideshowChromaSmoothness },
+                                set: { mediaVM.slideshowChromaSmoothness = $0 }
+                            ), in: 0.0...0.5, step: 0.01)
                         }
                     }
                 }

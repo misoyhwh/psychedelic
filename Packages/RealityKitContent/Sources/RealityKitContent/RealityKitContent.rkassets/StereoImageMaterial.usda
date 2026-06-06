@@ -11,6 +11,10 @@ def Xform "Root"
     {
         asset inputs:LeftImage = @@
         asset inputs:RightImage = @@
+        color3f inputs:KeyColor = (0, 1, 0)
+        float inputs:Threshold = 0.4
+        float inputs:Smoothness = 0.1
+        float inputs:ChromaEnable = 0
         token outputs:mtlx:surface.connect = </Root/StereoImageMaterial/UnlitSurface.outputs:out>
         token outputs:realitykit:vertex
 
@@ -20,7 +24,7 @@ def Xform "Root"
             bool inputs:applyPostProcessToneMap = 0
             color3f inputs:color.connect = </Root/StereoImageMaterial/CameraIndexSwitch.outputs:out>
             bool inputs:hasPremultipliedAlpha = false
-            float inputs:opacity = 1.0
+            float inputs:opacity.connect = </Root/StereoImageMaterial/FinalOpacity.outputs:out>
             token outputs:out
         }
 
@@ -51,6 +55,70 @@ def Xform "Root"
             asset inputs:file.connect = </Root/StereoImageMaterial.inputs:RightImage>
             string inputs:filtertype = "linear"
             color3f outputs:out
+        }
+
+        # --- Chroma key: per-eye background transparency ---
+        # 各眼で実際に表示される色 (CameraIndexSwitch 後) を vector3 に変換し、
+        # KeyColor との RGB 距離からアルファを生成する。左右独立に処理されるため
+        # 立体視 (視差) はそのまま保たれ、背景キー色付近だけが透明になる。
+
+        def Shader "PixelToVec"
+        {
+            uniform token info:id = "ND_convert_color3_vector3"
+            color3f inputs:in.connect = </Root/StereoImageMaterial/CameraIndexSwitch.outputs:out>
+            vector3f outputs:out
+        }
+
+        def Shader "KeyToVec"
+        {
+            uniform token info:id = "ND_convert_color3_vector3"
+            color3f inputs:in.connect = </Root/StereoImageMaterial.inputs:KeyColor>
+            vector3f outputs:out
+        }
+
+        def Shader "ColorDiff"
+        {
+            uniform token info:id = "ND_subtract_vector3"
+            vector3f inputs:in1.connect = </Root/StereoImageMaterial/PixelToVec.outputs:out>
+            vector3f inputs:in2.connect = </Root/StereoImageMaterial/KeyToVec.outputs:out>
+            vector3f outputs:out
+        }
+
+        def Shader "ColorDistance"
+        {
+            uniform token info:id = "ND_magnitude_vector3"
+            vector3f inputs:in.connect = </Root/StereoImageMaterial/ColorDiff.outputs:out>
+            float outputs:out
+        }
+
+        def Shader "HighEdge"
+        {
+            uniform token info:id = "ND_add_float"
+            float inputs:in1.connect = </Root/StereoImageMaterial.inputs:Threshold>
+            float inputs:in2.connect = </Root/StereoImageMaterial.inputs:Smoothness>
+            float outputs:out
+        }
+
+        # 距離 < Threshold (キー色に近い) -> 0 (透明)
+        # 距離 > Threshold + Smoothness (キー色から遠い前景) -> 1 (不透明)
+        def Shader "ChromaAlpha"
+        {
+            uniform token info:id = "ND_smoothstep_float"
+            float inputs:in.connect = </Root/StereoImageMaterial/ColorDistance.outputs:out>
+            float inputs:low.connect = </Root/StereoImageMaterial.inputs:Threshold>
+            float inputs:high.connect = </Root/StereoImageMaterial/HighEdge.outputs:out>
+            float outputs:out
+        }
+
+        # ChromaEnable=0 -> 常に 1.0 (従来通り不透明)。
+        # ChromaEnable=1 -> ChromaAlpha を採用 (背景透過)。
+        def Shader "FinalOpacity"
+        {
+            uniform token info:id = "ND_mix_float"
+            float inputs:bg = 1.0
+            float inputs:fg.connect = </Root/StereoImageMaterial/ChromaAlpha.outputs:out>
+            float inputs:mix.connect = </Root/StereoImageMaterial.inputs:ChromaEnable>
+            float outputs:out
         }
     }
 }
