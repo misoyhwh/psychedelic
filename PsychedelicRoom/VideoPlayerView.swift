@@ -110,6 +110,8 @@ class MediaPanelViewModel {
     var videoForegroundFeather: Float = 0.05
     var videoRotationH: Float = 0
     var videoRotationV: Float = 0
+    /// パネル湾曲量。0 = フラット、正値 = こちら向きに弧 (concave)、負値 = 奥向きに弧 (convex)。範囲は -1.0...1.0。
+    var videoCurveAmount: Float = 0
     var videoBobEnabled: Bool = false
     var videoBobAmplitude: Float = 0.3    // vertical meters (0.05...1.0)
     var videoBobSpeed: Float = 0.2        // cycles per second (0.02...0.5)

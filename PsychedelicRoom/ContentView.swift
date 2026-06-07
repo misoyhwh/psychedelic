@@ -519,6 +519,21 @@ struct ContentView: View {
                         ), in: -90...90, step: 5)
                     }
 
+                    VStack(alignment: .leading) {
+                        Text("パネル湾曲: \(videoCurveLabel)")
+                        Slider(value: Binding(
+                            get: { mediaVM.videoCurveAmount },
+                            set: { mediaVM.videoCurveAmount = $0 }
+                        ), in: -1.0...1.0, step: 0.05)
+                        HStack {
+                            Text("← 奥向き").font(.caption2).foregroundStyle(.secondary)
+                            Spacer()
+                            Text("まっすぐ").font(.caption2).foregroundStyle(.secondary)
+                            Spacer()
+                            Text("こちら向き →").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+
                     // Background removal (立体視動画クロマキー, 試作)
                     Divider()
                     Toggle("背景透過 (クロマキー, 試作)", isOn: Binding(
@@ -925,6 +940,14 @@ struct ContentView: View {
     /// パネル湾曲スライダーの数値ラベル。0 近傍はフラット表記、それ以外は方向 + 倍率。
     private var slideshowCurveLabel: String {
         let v = mediaVM.slideshowCurveAmount
+        if abs(v) < 0.01 { return "まっすぐ" }
+        let pct = Int(round(abs(v) * 100))
+        return v > 0 ? "こちら向き \(pct)%" : "奥向き \(pct)%"
+    }
+
+    /// 動画パネル湾曲スライダーの数値ラベル。
+    private var videoCurveLabel: String {
+        let v = mediaVM.videoCurveAmount
         if abs(v) < 0.01 { return "まっすぐ" }
         let pct = Int(round(abs(v) * 100))
         return v > 0 ? "こちら向き \(pct)%" : "奥向き \(pct)%"

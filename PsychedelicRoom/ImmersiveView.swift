@@ -54,6 +54,7 @@ struct ImmersiveView: View {
             let _ = mediaVM.isVideoPlaying
             let _ = mediaVM.videoRotationH
             let _ = mediaVM.videoRotationV
+            let _ = mediaVM.videoCurveAmount
             let _ = mediaVM.videoBobEnabled
             let _ = mediaVM.videoSurgeEnabled
             let _ = mediaVM.videoSwayEnabled
@@ -167,6 +168,9 @@ struct ImmersiveView: View {
         .onChange(of: mediaVM.videoRotationV) {
             updateVideoRotation()
         }
+        .onChange(of: mediaVM.videoCurveAmount) {
+            updateVideoMesh()
+        }
         .onChange(of: mediaVM.videoBobEnabled) {
             updateVideoMotion()
         }
@@ -247,7 +251,7 @@ struct ImmersiveView: View {
 
         let width = Float(mediaVM.videoSize.width)
         let height = Float(mediaVM.videoSize.height)
-        let mesh = MeshResource.generatePlane(width: width, height: height)
+        let mesh = makeCurvedPanelMesh(width: width, height: height, curve: mediaVM.videoCurveAmount)
 
         if (mediaVM.videoBackgroundRemovalEnabled || mediaVM.videoForegroundKeyEnabled), let pump = videoFramePump {
             recreateVideoEntityWithBackgroundRemoval(player: player, pump: pump, mesh: mesh, width: width, height: height)
@@ -359,6 +363,14 @@ struct ImmersiveView: View {
         print("Video visibility: \(shouldShow), enabled=\(mediaVM.videoEnabled), player=\(mediaVM.player != nil)")
     }
 
+    /// 既存 video entity のメッシュを湾曲量に合わせて差し替える (entity 再生成なし)。
+    private func updateVideoMesh() {
+        guard let entity = videoEntity else { return }
+        let width = Float(mediaVM.videoSize.width)
+        let height = Float(mediaVM.videoSize.height)
+        entity.model?.mesh = makeCurvedPanelMesh(width: width, height: height, curve: mediaVM.videoCurveAmount)
+    }
+
     // MARK: - Slideshow Panel Curve
 
     /// 既存 slideshow entity のメッシュを湾曲量に合わせて差し替える。
@@ -368,7 +380,7 @@ struct ImmersiveView: View {
         guard let entity = slideshowEntity else { return }
         let width = Float(mediaVM.slideshowDisplaySize.width)
         let height = Float(mediaVM.slideshowDisplaySize.height)
-        let mesh = makeSlideshowPanelMesh(
+        let mesh = makeCurvedPanelMesh(
             width: width,
             height: height,
             curve: mediaVM.slideshowCurveAmount
@@ -378,7 +390,7 @@ struct ImmersiveView: View {
 
     /// curve = 0 でフラット、>0 でこちら向きの凹面、<0 で奥向きの凸面の
     /// 円筒セクションメッシュを生成する。湾曲は水平方向のみで縦は直線。
-    private func makeSlideshowPanelMesh(width: Float, height: Float, curve: Float) -> MeshResource {
+    private func makeCurvedPanelMesh(width: Float, height: Float, curve: Float) -> MeshResource {
         // ほぼ 0 ならフラットなプレーンに退避 (除算 0 回避)。
         if abs(curve) < 0.01 {
             return MeshResource.generatePlane(width: width, height: height)
@@ -515,7 +527,7 @@ struct ImmersiveView: View {
         let height = Float(mediaVM.slideshowDisplaySize.height)
 
         Task {
-            let mesh = makeSlideshowPanelMesh(
+            let mesh = makeCurvedPanelMesh(
                 width: width,
                 height: height,
                 curve: mediaVM.slideshowCurveAmount
