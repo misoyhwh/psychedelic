@@ -134,7 +134,7 @@ final class IllustServerClient: Sendable {
     init(baseURL: URL) {
         self.baseURL = baseURL
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForRequest = 20
         config.timeoutIntervalForResource = 60
         config.waitsForConnectivity = false
         self.session = URLSession(configuration: config)
