@@ -185,10 +185,11 @@ final class StereoVideoFramePump {
     /// 被写体マスクを生成して CGImage で返す。重い同期処理 (バックグラウンドで呼ぶこと)。
     nonisolated private static func computeMaskCGImage(from buffer: CVPixelBuffer) -> CGImage? {
         let context = CIContext(options: nil)
-        // ~1024px に縮小して Vision コストを抑える。
+        // ~512px に縮小して Vision コストを抑える (マスク更新レート優先)。
+        let maskInputMaxDim: CGFloat = 512
         let ci = CIImage(cvPixelBuffer: buffer)
         let maxDim = max(ci.extent.width, ci.extent.height)
-        let scale = maxDim > 1024 ? 1024.0 / maxDim : 1.0
+        let scale = maxDim > maskInputMaxDim ? maskInputMaxDim / maxDim : 1.0
         let scaled = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cg = context.createCGImage(scaled, from: scaled.extent) else { return nil }
         let request = VNGenerateForegroundInstanceMaskRequest()
