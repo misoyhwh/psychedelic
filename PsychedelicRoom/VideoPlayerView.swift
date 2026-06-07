@@ -750,10 +750,8 @@ class MediaPanelViewModel {
 
         slideshowLoadTask = Task {
             do {
-                let textures = try await SlideshowEngine.loadTextures(
-                    for: image,
-                    generateForegroundMask: slideshowForegroundKeyEnabled
-                )
+                // Phase 1: 表示テクスチャを先に出す (マスク生成を待たない)。
+                let textures = try await SlideshowEngine.loadTextures(for: image)
 
                 guard !Task.isCancelled else { return }
 
@@ -773,9 +771,22 @@ class MediaPanelViewModel {
                 slideshowRightTexture = textures.rightTexture
                 slideshowIsStereo = textures.isStereo
                 slideshowDisplaySize = textures.displaySize
-                slideshowForegroundMask = textures.leftMask
-                slideshowForegroundMaskRight = textures.rightMask
-                slideshowTextureVersion += 1
+                slideshowTextureVersion += 1   // ← この時点でスライドは即座に切り替わる
+
+                // Phase 2: 前景マスクを後追い生成。重い/失敗してもスライド送りはブロックしない。
+                if slideshowForegroundKeyEnabled, let leftCG = textures.leftDisplayImage {
+                    let masks = await SlideshowEngine.foregroundMaskTextures(
+                        leftImage: leftCG,
+                        rightImage: textures.rightDisplayImage
+                    )
+                    guard !Task.isCancelled else { return }
+                    slideshowForegroundMask = masks.left
+                    slideshowForegroundMaskRight = masks.right
+                    // マスクが取れたら再バインドして切り抜きを適用。
+                    if masks.left != nil {
+                        slideshowTextureVersion += 1
+                    }
+                }
             } catch {
                 if !Task.isCancelled {
                     print("Failed to load slideshow image: \(error)")

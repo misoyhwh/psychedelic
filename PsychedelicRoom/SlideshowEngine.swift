@@ -19,10 +19,11 @@ struct LoadedImageTextures {
     let displaySize: CGSize
     /// 色サンプリング用の小サイズ CGImage (max 128px) — 二重ダウンロード回避のためここで作って渡す。
     let colorSamplingImage: CGImage?
-    /// 前景抽出マスク (Vision)。左/モノ用。生成しない/失敗時は nil。
-    let leftMask: TextureResource?
-    /// 前景抽出マスク (Vision)。右 (ステレオ) 用。
-    let rightMask: TextureResource?
+    /// 表示テクスチャ生成に使った CGImage (左/モノ)。前景マスクを後追い生成する際に
+    /// 再デコード/再ダウンロードせず使い回すために保持する。
+    let leftDisplayImage: CGImage?
+    /// 表示テクスチャ生成に使った CGImage (右ステレオ)。
+    let rightDisplayImage: CGImage?
 }
 
 @MainActor
@@ -54,7 +55,7 @@ class SlideshowEngine {
     /// Load textures with stereo detection at load time (not at scan time).
     /// URL が file:// ならディスク直読み、それ以外 (http/https) は URLSession でダウンロード後にデコード。
     /// 同じ CGImageSource から色サンプリング用サムネも作って返すので、呼び出し側で再ダウンロード不要。
-    static func loadTextures(for image: SlideshowImage, generateForegroundMask: Bool = false) async throws -> LoadedImageTextures {
+    static func loadTextures(for image: SlideshowImage) async throws -> LoadedImageTextures {
         let source: CGImageSource
         if image.url.isFileURL {
             guard let s = CGImageSourceCreateWithURL(image.url as CFURL, nil) else {
@@ -78,17 +79,14 @@ class SlideshowEngine {
             let leftTexture = try await TextureResource(image: leftCG, options: .init(semantic: .color))
             let rightTexture = try await TextureResource(image: rightCG, options: .init(semantic: .color))
             let size = computeDisplaySize(width: CGFloat(leftCG.width), height: CGFloat(leftCG.height))
-            // ステレオは左右個別にマスク生成 (視差に沿った縁)。
-            let leftMask = generateForegroundMask ? await makeForegroundMaskTexture(from: leftCG) : nil
-            let rightMask = generateForegroundMask ? await makeForegroundMaskTexture(from: rightCG) : nil
             return LoadedImageTextures(
                 leftTexture: leftTexture,
                 rightTexture: rightTexture,
                 isStereo: true,
                 displaySize: size,
                 colorSamplingImage: thumb,
-                leftMask: leftMask,
-                rightMask: rightMask
+                leftDisplayImage: leftCG,
+                rightDisplayImage: rightCG
             )
         }
 
@@ -98,16 +96,32 @@ class SlideshowEngine {
         }
         let texture = try await TextureResource(image: cgImage, options: .init(semantic: .color))
         let size = computeDisplaySize(width: CGFloat(cgImage.width), height: CGFloat(cgImage.height))
-        let monoMask = generateForegroundMask ? await makeForegroundMaskTexture(from: cgImage) : nil
         return LoadedImageTextures(
             leftTexture: texture,
             rightTexture: nil,
             isStereo: false,
             displaySize: size,
             colorSamplingImage: thumb,
-            leftMask: monoMask,
-            rightMask: nil
+            leftDisplayImage: cgImage,
+            rightDisplayImage: nil
         )
+    }
+
+    /// 前景マスクを表示テクスチャとは分離して生成する。表示は先に出し、これは後追いで適用する。
+    /// 既にデコード済みの表示用 CGImage を受け取るので再ダウンロード/再デコードは発生しない。
+    static func foregroundMaskTextures(
+        leftImage: CGImage,
+        rightImage: CGImage?
+    ) async -> (left: TextureResource?, right: TextureResource?) {
+        let left = await makeForegroundMaskTexture(from: leftImage)
+        // ステレオは右も個別生成 (視差に沿った縁)。モノは右なし。
+        let right: TextureResource?
+        if let rightImage {
+            right = await makeForegroundMaskTexture(from: rightImage)
+        } else {
+            right = nil
+        }
+        return (left, right)
     }
 
     /// 表示用に最大 `maxDisplayPixelSize` px に downsample した CGImage を返す。
