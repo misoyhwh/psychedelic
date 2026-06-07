@@ -33,9 +33,10 @@ final class StereoVideoFramePump {
     /// 最初のフレームでテクスチャが用意できた時に 1 回呼ばれる。マテリアルへのバインドに使う。
     var onTexturesReady: (() -> Void)?
 
-    // 前景抽出 (Vision)。重いので数フレームに1回・非同期生成し、左目マスクを両眼で共用する。
+    // 前景抽出 (Vision)。重いので数フレームに1回・非同期生成。左右個別にマスクを作る (視差に沿った縁)。
     var foregroundEnabled = false
-    private(set) var maskTexture: TextureResource?
+    private(set) var maskLeftTexture: TextureResource?
+    private(set) var maskRightTexture: TextureResource?
     /// マスクが更新された時に呼ばれる。マテリアルへの再バインドに使う。
     var onMaskUpdated: (() -> Void)?
     private var frameCounter = 0
@@ -79,7 +80,8 @@ final class StereoVideoFramePump {
         leftTexture = nil
         rightTexture = nil
         textureSize = nil
-        maskTexture = nil
+        maskLeftTexture = nil
+        maskRightTexture = nil
         frameCounter = 0
     }
 
@@ -116,29 +118,38 @@ final class StereoVideoFramePump {
         if let left { updateTexture(leftLLT, from: left) }
         if let right { updateTexture(rightLLT, from: right) }
 
-        maybeGenerateMask(left: left)
+        maybeGenerateMask(left: left, right: pair.right)
     }
 
-    // MARK: - Foreground mask (throttled, async)
+    // MARK: - Foreground mask (throttled, async, per-eye)
 
-    private func maybeGenerateMask(left: CVPixelBuffer?) {
+    private func maybeGenerateMask(left: CVPixelBuffer?, right: CVPixelBuffer?) {
         guard foregroundEnabled, let left else { return }
         frameCounter &+= 1
         guard frameCounter % maskInterval == 0, !maskInFlight else { return }
         maskInFlight = true
-        nonisolated(unsafe) let buffer = left
-        // 外側は MainActor (self 触れる)、重い処理だけ detached でバックグラウンドへ。
+        nonisolated(unsafe) let lb = left
+        nonisolated(unsafe) let rb = right
+        // 外側は MainActor (self 触れる)、Vision (左右2回) だけ detached でバックグラウンドへ。
         Task { [weak self] in
-            let maskCG = await Task.detached(priority: .userInitiated) {
-                StereoVideoFramePump.computeMaskCGImage(from: buffer)
+            let masks = await Task.detached(priority: .userInitiated) { () -> (CGImage?, CGImage?) in
+                let l = StereoVideoFramePump.computeMaskCGImage(from: lb)
+                let r: CGImage?
+                if let rb { r = StereoVideoFramePump.computeMaskCGImage(from: rb) } else { r = nil }
+                return (l, r)
             }.value
-            var tex: TextureResource?
-            if let maskCG {
-                tex = try? await TextureResource(image: maskCG, options: .init(semantic: .raw))
+            var lt: TextureResource?
+            var rt: TextureResource?
+            if let lcg = masks.0 {
+                lt = try? await TextureResource(image: lcg, options: .init(semantic: .raw))
+            }
+            if let rcg = masks.1 {
+                rt = try? await TextureResource(image: rcg, options: .init(semantic: .raw))
             }
             guard let self else { return }
-            if let tex {
-                self.maskTexture = tex
+            if lt != nil || rt != nil {
+                self.maskLeftTexture = lt
+                self.maskRightTexture = rt
                 self.onMaskUpdated?()
             }
             self.maskInFlight = false

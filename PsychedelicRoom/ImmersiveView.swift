@@ -313,14 +313,15 @@ struct ImmersiveView: View {
                 entity.model?.materials = [m]
             }
 
-            // 前景マスクが更新されるたびに LeftMask/RightMask を再バインド (左目マスクを両眼共用)。
+            // 前景マスクが更新されるたびに LeftMask/RightMask を再バインド (左右個別)。
             pump.foregroundEnabled = mediaVM.videoForegroundKeyEnabled
             pump.onMaskUpdated = { [weak entity, weak pump] in
                 guard let entity, let pump,
                       var m = entity.model?.materials.first as? ShaderGraphMaterial,
-                      let mask = pump.maskTexture else { return }
-                try? m.setParameter(name: "LeftMask", value: .textureResource(mask))
-                try? m.setParameter(name: "RightMask", value: .textureResource(mask))
+                      let leftMask = pump.maskLeftTexture else { return }
+                let rightMask = pump.maskRightTexture ?? leftMask // モノラルは左で代用
+                try? m.setParameter(name: "LeftMask", value: .textureResource(leftMask))
+                try? m.setParameter(name: "RightMask", value: .textureResource(rightMask))
                 try? m.setParameter(name: "MaskEnable", value: .float(pump.foregroundEnabled ? 1.0 : 0.0))
                 entity.model?.materials = [m]
             }
