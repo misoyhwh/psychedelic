@@ -803,6 +803,41 @@ struct ContentView: View {
                             ), in: 0.0...0.5, step: 0.01)
                         }
                     }
+
+                    // Foreground extraction (Vision 被写体マスクで背景透過)
+                    Divider()
+                    Toggle("前景抽出 (背景透過)", isOn: Binding(
+                        get: { mediaVM.slideshowForegroundKeyEnabled },
+                        set: { newValue in
+                            mediaVM.slideshowForegroundKeyEnabled = newValue
+                            // ON 時はマスク未生成のため現在画像を再読込して生成する。
+                            // OFF 時もマスクを破棄するため再読込する。
+                            mediaVM.loadCurrentSlideshowImage()
+                        }
+                    ))
+                    .toggleStyle(.switch)
+
+                    if mediaVM.slideshowForegroundKeyEnabled {
+                        Text("被写体を残し背景を透明化（Vision被写体抽出。メートル単位の深度ではありません）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        VStack(alignment: .leading) {
+                            Text("抽出しきい値: \(Int(mediaVM.slideshowForegroundThreshold * 100))%")
+                            Slider(value: Binding(
+                                get: { mediaVM.slideshowForegroundThreshold },
+                                set: { mediaVM.slideshowForegroundThreshold = $0 }
+                            ), in: 0.0...1.0, step: 0.01)
+                        }
+
+                        VStack(alignment: .leading) {
+                            Text("縁のぼかし: \(Int(mediaVM.slideshowForegroundFeather * 100))%")
+                            Slider(value: Binding(
+                                get: { mediaVM.slideshowForegroundFeather },
+                                set: { mediaVM.slideshowForegroundFeather = $0 }
+                            ), in: 0.0...0.3, step: 0.01)
+                        }
+                    }
                 }
             }
         }

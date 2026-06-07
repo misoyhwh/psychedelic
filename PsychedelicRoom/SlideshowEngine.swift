@@ -2,6 +2,8 @@ import Foundation
 import RealityKit
 import ImageIO
 import CoreGraphics
+import Vision
+import CoreImage
 
 struct SlideshowImage {
     let url: URL
@@ -17,6 +19,10 @@ struct LoadedImageTextures {
     let displaySize: CGSize
     /// 色サンプリング用の小サイズ CGImage (max 128px) — 二重ダウンロード回避のためここで作って渡す。
     let colorSamplingImage: CGImage?
+    /// 前景抽出マスク (Vision)。左/モノ用。生成しない/失敗時は nil。
+    let leftMask: TextureResource?
+    /// 前景抽出マスク (Vision)。右 (ステレオ) 用。
+    let rightMask: TextureResource?
 }
 
 @MainActor
@@ -48,7 +54,7 @@ class SlideshowEngine {
     /// Load textures with stereo detection at load time (not at scan time).
     /// URL が file:// ならディスク直読み、それ以外 (http/https) は URLSession でダウンロード後にデコード。
     /// 同じ CGImageSource から色サンプリング用サムネも作って返すので、呼び出し側で再ダウンロード不要。
-    static func loadTextures(for image: SlideshowImage) async throws -> LoadedImageTextures {
+    static func loadTextures(for image: SlideshowImage, generateForegroundMask: Bool = false) async throws -> LoadedImageTextures {
         let source: CGImageSource
         if image.url.isFileURL {
             guard let s = CGImageSourceCreateWithURL(image.url as CFURL, nil) else {
@@ -72,12 +78,17 @@ class SlideshowEngine {
             let leftTexture = try await TextureResource(image: leftCG, options: .init(semantic: .color))
             let rightTexture = try await TextureResource(image: rightCG, options: .init(semantic: .color))
             let size = computeDisplaySize(width: CGFloat(leftCG.width), height: CGFloat(leftCG.height))
+            // ステレオは左右個別にマスク生成 (視差に沿った縁)。
+            let leftMask = generateForegroundMask ? await makeForegroundMaskTexture(from: leftCG) : nil
+            let rightMask = generateForegroundMask ? await makeForegroundMaskTexture(from: rightCG) : nil
             return LoadedImageTextures(
                 leftTexture: leftTexture,
                 rightTexture: rightTexture,
                 isStereo: true,
                 displaySize: size,
-                colorSamplingImage: thumb
+                colorSamplingImage: thumb,
+                leftMask: leftMask,
+                rightMask: rightMask
             )
         }
 
@@ -87,12 +98,15 @@ class SlideshowEngine {
         }
         let texture = try await TextureResource(image: cgImage, options: .init(semantic: .color))
         let size = computeDisplaySize(width: CGFloat(cgImage.width), height: CGFloat(cgImage.height))
+        let monoMask = generateForegroundMask ? await makeForegroundMaskTexture(from: cgImage) : nil
         return LoadedImageTextures(
             leftTexture: texture,
             rightTexture: nil,
             isStereo: false,
             displaySize: size,
-            colorSamplingImage: thumb
+            colorSamplingImage: thumb,
+            leftMask: monoMask,
+            rightMask: nil
         )
     }
 
@@ -118,6 +132,51 @@ class SlideshowEngine {
             kCGImageSourceCreateThumbnailWithTransform: true,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    // MARK: - Foreground Mask (Vision)
+
+    /// Vision 入力に渡す最大辺。品質と速度のバランスで原寸より落とす。
+    private static let maskInputMaxPixelSize: Int = 1024
+
+    /// 前景被写体マスクを Vision (`VNGenerateForegroundInstanceMask`) で生成し TextureResource にする。
+    /// マスクは色管理しない grayscale なので semantic: .raw。重い同期処理はメインスレッド外で実行。
+    /// 生成できない (被写体なし/失敗) 場合は nil を返し、呼び出し側で全表示にフォールバックする。
+    private static func makeForegroundMaskTexture(from cgImage: CGImage) async -> TextureResource? {
+        let maxSize = maskInputMaxPixelSize
+        let maskCG: CGImage? = await Task.detached(priority: .userInitiated) {
+            let context = CIContext(options: nil)
+            let input = Self.downscaleCGImage(cgImage, maxDimension: maxSize, context: context)
+            let request = VNGenerateForegroundInstanceMaskRequest()
+            let handler = VNImageRequestHandler(cgImage: input, options: [:])
+            do {
+                try handler.perform([request])
+                guard let result = request.results?.first, !result.allInstances.isEmpty else {
+                    return nil
+                }
+                let buffer = try result.generateScaledMaskForImage(
+                    forInstances: result.allInstances,
+                    from: handler
+                )
+                let ci = CIImage(cvPixelBuffer: buffer)
+                return context.createCGImage(ci, from: ci.extent)
+            } catch {
+                print("Foreground mask generation failed: \(error)")
+                return nil
+            }
+        }.value
+        guard let maskCG else { return nil }
+        return try? await TextureResource(image: maskCG, options: .init(semantic: .raw))
+    }
+
+    nonisolated private static func downscaleCGImage(_ cgImage: CGImage, maxDimension: Int, context: CIContext) -> CGImage {
+        let maxDim = max(cgImage.width, cgImage.height)
+        guard maxDim > maxDimension else { return cgImage }
+        let scale = CGFloat(maxDimension) / CGFloat(maxDim)
+        let w = Int((CGFloat(cgImage.width) * scale).rounded())
+        let h = Int((CGFloat(cgImage.height) * scale).rounded())
+        let ci = CIImage(cgImage: cgImage).transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        return context.createCGImage(ci, from: CGRect(x: 0, y: 0, width: w, height: h)) ?? cgImage
     }
 
     // MARK: - Private

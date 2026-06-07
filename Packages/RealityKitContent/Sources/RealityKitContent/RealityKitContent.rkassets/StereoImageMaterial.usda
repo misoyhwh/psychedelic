@@ -15,6 +15,11 @@ def Xform "Root"
         float inputs:Threshold = 0.4
         float inputs:Smoothness = 0.1
         float inputs:ChromaEnable = 0
+        asset inputs:LeftMask = @@
+        asset inputs:RightMask = @@
+        float inputs:MaskEnable = 0
+        float inputs:MaskThreshold = 0.5
+        float inputs:MaskFeather = 0.05
         token outputs:mtlx:surface.connect = </Root/StereoImageMaterial/UnlitSurface.outputs:out>
         token outputs:realitykit:vertex
 
@@ -24,7 +29,7 @@ def Xform "Root"
             bool inputs:applyPostProcessToneMap = 0
             color3f inputs:color.connect = </Root/StereoImageMaterial/CameraIndexSwitch.outputs:out>
             bool inputs:hasPremultipliedAlpha = false
-            float inputs:opacity.connect = </Root/StereoImageMaterial/FinalOpacity.outputs:out>
+            float inputs:opacity.connect = </Root/StereoImageMaterial/OpacityCombine.outputs:out>
             token outputs:out
         }
 
@@ -118,6 +123,86 @@ def Xform "Root"
             float inputs:bg = 1.0
             float inputs:fg.connect = </Root/StereoImageMaterial/ChromaAlpha.outputs:out>
             float inputs:mix.connect = </Root/StereoImageMaterial.inputs:ChromaEnable>
+            float outputs:out
+        }
+
+        # --- 前景抽出 (Vision 被写体マスク): 背景を透過 ---
+        # 各眼のマスク (前景=1 / 背景=0) をカメラインデックスで切り替え、
+        # しきい値 +/- ぼかしで smoothstep してアルファ化する。クロマキーとは
+        # 独立に乗算で合成されるため、両方を併用できる。
+
+        def Shader "LeftMaskNode"
+        {
+            uniform token info:id = "ND_image_float"
+            float inputs:default = 1
+            asset inputs:file = @left_mask.png@
+            asset inputs:file.connect = </Root/StereoImageMaterial.inputs:LeftMask>
+            string inputs:filtertype = "linear"
+            float outputs:out
+        }
+
+        def Shader "RightMaskNode"
+        {
+            uniform token info:id = "ND_image_float"
+            float inputs:default = 1
+            asset inputs:file = @right_mask.png@
+            asset inputs:file.connect = </Root/StereoImageMaterial.inputs:RightMask>
+            string inputs:filtertype = "linear"
+            float outputs:out
+        }
+
+        def Shader "MaskSwitch"
+        {
+            uniform token info:id = "ND_realitykit_geometry_switch_cameraindex_float"
+            float inputs:mono.connect = </Root/StereoImageMaterial/LeftMaskNode.outputs:out>
+            float inputs:left.connect = </Root/StereoImageMaterial/LeftMaskNode.outputs:out>
+            float inputs:right.connect = </Root/StereoImageMaterial/RightMaskNode.outputs:out>
+            float outputs:out
+        }
+
+        def Shader "MaskLow"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1.connect = </Root/StereoImageMaterial.inputs:MaskThreshold>
+            float inputs:in2.connect = </Root/StereoImageMaterial.inputs:MaskFeather>
+            float outputs:out
+        }
+
+        def Shader "MaskHigh"
+        {
+            uniform token info:id = "ND_add_float"
+            float inputs:in1.connect = </Root/StereoImageMaterial.inputs:MaskThreshold>
+            float inputs:in2.connect = </Root/StereoImageMaterial.inputs:MaskFeather>
+            float outputs:out
+        }
+
+        # マスク値 < Threshold-Feather (背景) -> 0 (透明)
+        # マスク値 > Threshold+Feather (前景) -> 1 (不透明)
+        def Shader "MaskAlpha"
+        {
+            uniform token info:id = "ND_smoothstep_float"
+            float inputs:in.connect = </Root/StereoImageMaterial/MaskSwitch.outputs:out>
+            float inputs:low.connect = </Root/StereoImageMaterial/MaskLow.outputs:out>
+            float inputs:high.connect = </Root/StereoImageMaterial/MaskHigh.outputs:out>
+            float outputs:out
+        }
+
+        # MaskEnable=0 -> 1.0 (前景抽出オフ)。MaskEnable=1 -> MaskAlpha。
+        def Shader "MaskApplied"
+        {
+            uniform token info:id = "ND_mix_float"
+            float inputs:bg = 1.0
+            float inputs:fg.connect = </Root/StereoImageMaterial/MaskAlpha.outputs:out>
+            float inputs:mix.connect = </Root/StereoImageMaterial.inputs:MaskEnable>
+            float outputs:out
+        }
+
+        # クロマキーと前景抽出を乗算合成 (両オフなら 1.0)。
+        def Shader "OpacityCombine"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/StereoImageMaterial/FinalOpacity.outputs:out>
+            float inputs:in2.connect = </Root/StereoImageMaterial/MaskApplied.outputs:out>
             float outputs:out
         }
     }

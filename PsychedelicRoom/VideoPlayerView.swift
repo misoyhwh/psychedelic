@@ -186,6 +186,17 @@ class MediaPanelViewModel {
     /// 透明 -> 不透明へ遷移する境界の幅 (大きいほど縁がなだらか)。
     var slideshowChromaSmoothness: Float = 0.1
 
+    // Slideshow 前景抽出 (Vision 被写体マスクで背景を透過)。
+    var slideshowForegroundKeyEnabled: Bool = false
+    /// マットのしきい値 (0...1)。大きいほど前景判定が厳しく背景が広く透過。
+    var slideshowForegroundThreshold: Float = 0.5
+    /// マット境界のぼかし幅。
+    var slideshowForegroundFeather: Float = 0.05
+    /// 前景マスク (左/モノ)。機能オフ/生成失敗時は nil。
+    var slideshowForegroundMask: TextureResource?
+    /// 前景マスク (右ステレオ)。
+    var slideshowForegroundMaskRight: TextureResource?
+
     // Server search state
     var slideshowServerSearchInProgress: Bool = false
     var slideshowServerSearchError: String? = nil
@@ -739,7 +750,10 @@ class MediaPanelViewModel {
 
         slideshowLoadTask = Task {
             do {
-                let textures = try await SlideshowEngine.loadTextures(for: image)
+                let textures = try await SlideshowEngine.loadTextures(
+                    for: image,
+                    generateForegroundMask: slideshowForegroundKeyEnabled
+                )
 
                 guard !Task.isCancelled else { return }
 
@@ -752,11 +766,15 @@ class MediaPanelViewModel {
                 // Release old textures before assigning new ones
                 slideshowTexture = nil
                 slideshowRightTexture = nil
+                slideshowForegroundMask = nil
+                slideshowForegroundMaskRight = nil
 
                 slideshowTexture = textures.leftTexture
                 slideshowRightTexture = textures.rightTexture
                 slideshowIsStereo = textures.isStereo
                 slideshowDisplaySize = textures.displaySize
+                slideshowForegroundMask = textures.leftMask
+                slideshowForegroundMaskRight = textures.rightMask
                 slideshowTextureVersion += 1
             } catch {
                 if !Task.isCancelled {

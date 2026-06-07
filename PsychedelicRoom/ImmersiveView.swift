@@ -25,7 +25,9 @@ struct ImmersiveView: View {
     @State private var slideshowEntity: ModelEntity?
     @State private var slideshowInitialScale: Float = 1.0
 
-    var body: some View {
+    // body を分割しないと SwiftUI の型チェッカーが時間切れになるため、
+    // RealityView 本体 + 動画系 onChange を sceneView に切り出している。
+    private var sceneView: some View {
         RealityView { content in
             sceneReconstructor.configure(audioEngine: audioEngine)
             content.add(sceneReconstructor.rootEntity)
@@ -62,6 +64,9 @@ struct ImmersiveView: View {
             let _ = mediaVM.slideshowChromaKeyColor
             let _ = mediaVM.slideshowChromaThreshold
             let _ = mediaVM.slideshowChromaSmoothness
+            let _ = mediaVM.slideshowForegroundKeyEnabled
+            let _ = mediaVM.slideshowForegroundThreshold
+            let _ = mediaVM.slideshowForegroundFeather
             let _ = mediaVM.videoColorTop
             let _ = mediaVM.videoColorMiddle
             let _ = mediaVM.videoColorBottom
@@ -161,6 +166,10 @@ struct ImmersiveView: View {
         .onChange(of: mediaVM.videoSwayEnabled) {
             updateVideoMotion()
         }
+    }
+
+    var body: some View {
+        sceneView
         // MARK: - Slideshow panel onChange handlers
         .onChange(of: mediaVM.slideshowTextureVersion) {
             recreateSlideshowEntity()
@@ -188,6 +197,12 @@ struct ImmersiveView: View {
         }
         .onChange(of: mediaVM.slideshowChromaSmoothness) {
             updateSlideshowChromaKey()
+        }
+        .onChange(of: mediaVM.slideshowForegroundThreshold) {
+            updateSlideshowForegroundKey()
+        }
+        .onChange(of: mediaVM.slideshowForegroundFeather) {
+            updateSlideshowForegroundKey()
         }
     }
 
@@ -400,6 +415,7 @@ struct ImmersiveView: View {
                 try stereoMaterial.setParameter(name: "LeftImage", value: .textureResource(leftTexture))
                 try stereoMaterial.setParameter(name: "RightImage", value: .textureResource(rightTexture))
                 applyChromaParameters(to: &stereoMaterial)
+                applyForegroundParameters(to: &stereoMaterial)
                 material = stereoMaterial
             } catch {
                 print("Failed to load stereo material: \(error)")
@@ -449,6 +465,35 @@ struct ImmersiveView: View {
         guard let entity = slideshowEntity,
               var material = entity.model?.materials.first as? ShaderGraphMaterial else { return }
         applyChromaParameters(to: &material)
+        entity.model?.materials = [material]
+    }
+
+    // MARK: - Slideshow Foreground Extraction
+
+    /// 前景抽出マスクとパラメータを ShaderGraphMaterial へ書き込む。
+    /// MaskEnable は「機能ON かつ 有効なマスクが存在」する時のみ 1.0。
+    /// 生成失敗 (mask 無し) 時は 0.0 にして全表示を維持する。
+    private func applyForegroundParameters(to material: inout ShaderGraphMaterial) {
+        let leftMask = mediaVM.slideshowForegroundMask
+        let rightMask = mediaVM.slideshowForegroundMaskRight ?? leftMask
+        if let leftMask {
+            try? material.setParameter(name: "LeftMask", value: .textureResource(leftMask))
+        }
+        if let rightMask {
+            try? material.setParameter(name: "RightMask", value: .textureResource(rightMask))
+        }
+        let active = mediaVM.slideshowForegroundKeyEnabled && leftMask != nil
+        try? material.setParameter(name: "MaskEnable", value: .float(active ? 1.0 : 0.0))
+        try? material.setParameter(name: "MaskThreshold", value: .float(mediaVM.slideshowForegroundThreshold))
+        try? material.setParameter(name: "MaskFeather", value: .float(mediaVM.slideshowForegroundFeather))
+    }
+
+    /// しきい値・ぼかしの連続操作をマテリアル再生成なしで反映する。
+    /// 有効/無効やマスク有無の変化は slideshowTextureVersion 経由の再生成で扱う。
+    private func updateSlideshowForegroundKey() {
+        guard let entity = slideshowEntity,
+              var material = entity.model?.materials.first as? ShaderGraphMaterial else { return }
+        applyForegroundParameters(to: &material)
         entity.model?.materials = [material]
     }
 
