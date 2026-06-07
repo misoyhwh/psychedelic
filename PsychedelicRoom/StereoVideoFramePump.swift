@@ -42,6 +42,8 @@ final class StereoVideoFramePump {
     private var frameCounter = 0
     private var maskInFlight = false
     private let maskInterval = 6 // 約 N 表示フレームに1回マスク生成
+    /// detach/attach で増やす世代トークン。飛行中のマスクが別動画へ適用されるのを防ぐ。
+    private var maskGeneration = 0
 
     // FPS 計測 (1秒窓): 描画(フレーム更新)レートとマスク更新レート。
     var onStats: ((_ displayFPS: Double, _ maskFPS: Double) -> Void)?
@@ -92,6 +94,8 @@ final class StereoVideoFramePump {
         displayFrameCount = 0
         maskFrameCount = 0
         statsWindowStart = 0
+        maskInFlight = false
+        maskGeneration &+= 1 // 飛行中のマスク結果を無効化
         onStats?(0, 0)
     }
 
@@ -154,6 +158,7 @@ final class StereoVideoFramePump {
         guard frameCounter % maskInterval == 0, !maskInFlight else { return }
         maskInFlight = true
         nonisolated(unsafe) let lb = left
+        let gen = maskGeneration
         // 推論回数を1回に抑える (マスク更新レート優先)。左目マスクを両眼で共用する。
         Task { [weak self] in
             let leftCG = await Task.detached(priority: .userInitiated) {
@@ -163,7 +168,8 @@ final class StereoVideoFramePump {
             if let leftCG {
                 lt = try? await TextureResource(image: leftCG, options: .init(semantic: .raw))
             }
-            guard let self else { return }
+            // detach/別動画への切替後 (世代不一致) なら破棄。maskInFlight は detach 側でリセット済み。
+            guard let self, self.maskGeneration == gen else { return }
             if let lt {
                 self.maskLeftTexture = lt
                 self.maskRightTexture = nil // nil の時は binding 側が left を両眼へ使う
