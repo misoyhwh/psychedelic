@@ -2,6 +2,7 @@ import SwiftUI
 import RealityKit
 @preconcurrency import ARKit
 import RealityKitContent
+import AVFoundation
 
 struct ImmersiveView: View {
     @Environment(AppModel.self) private var appModel
@@ -13,6 +14,7 @@ struct ImmersiveView: View {
     // Video panel entities
     @State private var videoRootEntity = Entity()
     @State private var videoEntity: ModelEntity?
+    @State private var videoFramePump: StereoVideoFramePump? = StereoVideoFramePump()
     @State private var videoInitialScale: Float = 1.0
     @State private var videoBobBaseY: Float = 1.5
     @State private var videoSurgeBaseZ: Float = -2.0
@@ -55,6 +57,10 @@ struct ImmersiveView: View {
             let _ = mediaVM.videoBobEnabled
             let _ = mediaVM.videoSurgeEnabled
             let _ = mediaVM.videoSwayEnabled
+            let _ = mediaVM.videoBackgroundRemovalEnabled
+            let _ = mediaVM.videoChromaThreshold
+            let _ = mediaVM.videoChromaSmoothness
+            let _ = mediaVM.videoChromaKeyColor
             let _ = mediaVM.slideshowTextureVersion
             let _ = mediaVM.slideshowEnabled
             let _ = mediaVM.slideshowRotationH
@@ -136,6 +142,7 @@ struct ImmersiveView: View {
         .onDisappear {
             videoMotionTimer?.invalidate()
             videoMotionTimer = nil
+            videoFramePump?.detach()
         }
         .gesture(occlusionDragGesture)
         .gesture(panelDragGesture)
@@ -204,6 +211,15 @@ struct ImmersiveView: View {
         .onChange(of: mediaVM.slideshowForegroundFeather) {
             updateSlideshowForegroundKey()
         }
+        .onChange(of: mediaVM.videoChromaThreshold) {
+            updateVideoChromaKey()
+        }
+        .onChange(of: mediaVM.videoChromaSmoothness) {
+            updateVideoChromaKey()
+        }
+        .onChange(of: mediaVM.videoChromaKeyColor) {
+            updateVideoChromaKey()
+        }
     }
 
     // MARK: - Video Entity
@@ -215,22 +231,92 @@ struct ImmersiveView: View {
         }
         videoEntity = nil
 
-        guard let player = mediaVM.player else { return }
+        guard let player = mediaVM.player else {
+            videoFramePump?.detach()
+            return
+        }
 
         let width = Float(mediaVM.videoSize.width)
         let height = Float(mediaVM.videoSize.height)
-
         let mesh = MeshResource.generatePlane(width: width, height: height)
+
+        if mediaVM.videoBackgroundRemovalEnabled, let pump = videoFramePump {
+            recreateVideoEntityWithBackgroundRemoval(player: player, pump: pump, mesh: mesh, width: width, height: height)
+            return
+        }
+
+        // 通常表示: VideoMaterial (透過なし)。
+        videoFramePump?.detach()
         let material = VideoMaterial(avPlayer: player)
         let entity = ModelEntity(mesh: mesh, materials: [material])
-
         entity.components.set(CollisionComponent(shapes: [.generateBox(width: width, height: height, depth: 0.01)]))
         entity.components.set(InputTargetComponent(allowedInputTypes: .all))
         entity.name = "videoPanel"
-
         videoRootEntity.addChild(entity)
         videoEntity = entity
-        print("Video entity created: \(width)x\(height)")
+        print("Video entity created (VideoMaterial): \(width)x\(height)")
+    }
+
+    /// 背景透過モード: StereoImageMaterial にフレームポンプの左右テクスチャを流す。
+    private func recreateVideoEntityWithBackgroundRemoval(
+        player: AVPlayer, pump: StereoVideoFramePump,
+        mesh: MeshResource, width: Float, height: Float
+    ) {
+        Task {
+            var material: RealityKit.Material
+            do {
+                var m = try await ShaderGraphMaterial(
+                    named: "/Root/StereoImageMaterial",
+                    from: "StereoImageMaterial",
+                    in: realityKitContentBundle
+                )
+                applyVideoChromaParameters(to: &m)
+                try? m.setParameter(name: "MaskEnable", value: .float(0)) // 前景抽出は動画では未対応
+                material = m
+            } catch {
+                print("Failed to load video stereo material: \(error)")
+                material = UnlitMaterial(color: .black)
+            }
+
+            for child in videoRootEntity.children { child.removeFromParent() }
+            let entity = ModelEntity(mesh: mesh, materials: [material])
+            entity.components.set(CollisionComponent(shapes: [.generateBox(width: width, height: height, depth: 0.01)]))
+            entity.components.set(InputTargetComponent(allowedInputTypes: .all))
+            entity.name = "videoPanel"
+            videoRootEntity.addChild(entity)
+            videoEntity = entity
+
+            // 最初のフレームでテクスチャが用意できたら LeftImage/RightImage をバインド。
+            pump.onTexturesReady = { [weak entity, weak pump] in
+                guard let entity, let pump,
+                      var m = entity.model?.materials.first as? ShaderGraphMaterial else { return }
+                if let lt = pump.leftTexture {
+                    try? m.setParameter(name: "LeftImage", value: .textureResource(lt))
+                }
+                if let rt = pump.rightTexture ?? pump.leftTexture {
+                    try? m.setParameter(name: "RightImage", value: .textureResource(rt))
+                }
+                entity.model?.materials = [m]
+            }
+            pump.attach(to: player)
+            print("Video entity created (background removal): \(width)x\(height)")
+        }
+    }
+
+    private func applyVideoChromaParameters(to material: inout ShaderGraphMaterial) {
+        let c = mediaVM.videoChromaKeyColor
+        let key = CGColor(red: CGFloat(c.x), green: CGFloat(c.y), blue: CGFloat(c.z), alpha: 1)
+        try? material.setParameter(name: "KeyColor", value: .color(key))
+        try? material.setParameter(name: "Threshold", value: .float(mediaVM.videoChromaThreshold))
+        try? material.setParameter(name: "Smoothness", value: .float(mediaVM.videoChromaSmoothness))
+        try? material.setParameter(name: "ChromaEnable", value: .float(mediaVM.videoBackgroundRemovalEnabled ? 1.0 : 0.0))
+    }
+
+    private func updateVideoChromaKey() {
+        guard let entity = videoEntity,
+              var material = entity.model?.materials.first as? ShaderGraphMaterial else { return }
+        applyVideoChromaParameters(to: &material)
+        entity.model?.materials = [material]
     }
 
     private func updateVideoVisibility() {

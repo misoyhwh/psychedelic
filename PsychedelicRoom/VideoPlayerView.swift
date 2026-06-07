@@ -97,6 +97,12 @@ class MediaPanelViewModel {
     var videoURL: URL? = nil
     var isVideoPlaying: Bool = false
     var videoSize: CGSize = CGSize(width: 1.92, height: 1.08)
+
+    // 動画 背景透過 (試作)。立体視フレームを自前テクスチャ化し StereoImageMaterial のクロマキーで抜く。
+    var videoBackgroundRemovalEnabled: Bool = false
+    var videoChromaKeyColor: SIMD3<Float> = SIMD3<Float>(0, 1, 0)
+    var videoChromaThreshold: Float = 0.4
+    var videoChromaSmoothness: Float = 0.1
     var videoRotationH: Float = 0
     var videoRotationV: Float = 0
     var videoBobEnabled: Bool = false

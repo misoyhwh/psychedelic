@@ -519,6 +519,53 @@ struct ContentView: View {
                         ), in: -90...90, step: 5)
                     }
 
+                    // Background removal (立体視動画クロマキー, 試作)
+                    Divider()
+                    Toggle("背景透過 (クロマキー, 試作)", isOn: Binding(
+                        get: { mediaVM.videoBackgroundRemovalEnabled },
+                        set: {
+                            mediaVM.videoBackgroundRemovalEnabled = $0
+                            // マテリアル種別が変わるため動画パネルを作り直す。
+                            mediaVM.videoVersion += 1
+                        }
+                    ))
+                    .toggleStyle(.switch)
+
+                    if mediaVM.videoBackgroundRemovalEnabled {
+                        Text("立体視を保ったままキー色付近を透明化（試作・実機推奨）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        ColorPicker("キー色", selection: Binding(
+                            get: {
+                                let c = mediaVM.videoChromaKeyColor
+                                return Color(.sRGB, red: Double(c.x), green: Double(c.y), blue: Double(c.z))
+                            },
+                            set: { newColor in
+                                let ui = UIColor(newColor)
+                                var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                                ui.getRed(&r, green: &g, blue: &b, alpha: &a)
+                                mediaVM.videoChromaKeyColor = SIMD3<Float>(Float(r), Float(g), Float(b))
+                            }
+                        ))
+
+                        VStack(alignment: .leading) {
+                            Text("透過範囲: \(Int(mediaVM.videoChromaThreshold * 100))%")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoChromaThreshold },
+                                set: { mediaVM.videoChromaThreshold = $0 }
+                            ), in: 0.0...1.0, step: 0.01)
+                        }
+
+                        VStack(alignment: .leading) {
+                            Text("縁のぼかし: \(Int(mediaVM.videoChromaSmoothness * 100))%")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoChromaSmoothness },
+                                set: { mediaVM.videoChromaSmoothness = $0 }
+                            ), in: 0.0...0.5, step: 0.01)
+                        }
+                    }
+
                     // Vertical bob controls
                     Toggle("上下運動", isOn: Binding(
                         get: { mediaVM.videoBobEnabled },
