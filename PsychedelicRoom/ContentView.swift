@@ -519,6 +519,112 @@ struct ContentView: View {
                         ), in: -90...90, step: 5)
                     }
 
+                    VStack(alignment: .leading) {
+                        Text("パネル湾曲: \(videoCurveLabel)")
+                        Slider(value: Binding(
+                            get: { mediaVM.videoCurveAmount },
+                            set: { mediaVM.videoCurveAmount = $0 }
+                        ), in: -1.0...1.0, step: 0.05)
+                        HStack {
+                            Text("← 奥向き").font(.caption2).foregroundStyle(.secondary)
+                            Spacer()
+                            Text("まっすぐ").font(.caption2).foregroundStyle(.secondary)
+                            Spacer()
+                            Text("こちら向き →").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+
+                    // Background removal (立体視動画クロマキー, 試作)
+                    Divider()
+                    Toggle("背景透過 (クロマキー, 試作)", isOn: Binding(
+                        get: { mediaVM.videoBackgroundRemovalEnabled },
+                        set: {
+                            mediaVM.videoBackgroundRemovalEnabled = $0
+                            // マテリアル種別が変わるため動画パネルを作り直す。
+                            mediaVM.videoVersion += 1
+                        }
+                    ))
+                    .toggleStyle(.switch)
+
+                    if mediaVM.videoBackgroundRemovalEnabled {
+                        Text("立体視を保ったままキー色付近を透明化（試作・実機推奨）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        ColorPicker("キー色", selection: Binding(
+                            get: {
+                                let c = mediaVM.videoChromaKeyColor
+                                return Color(.sRGB, red: Double(c.x), green: Double(c.y), blue: Double(c.z))
+                            },
+                            set: { newColor in
+                                let ui = UIColor(newColor)
+                                var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+                                ui.getRed(&r, green: &g, blue: &b, alpha: &a)
+                                mediaVM.videoChromaKeyColor = SIMD3<Float>(Float(r), Float(g), Float(b))
+                            }
+                        ))
+
+                        VStack(alignment: .leading) {
+                            Text("透過範囲: \(Int(mediaVM.videoChromaThreshold * 100))%")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoChromaThreshold },
+                                set: { mediaVM.videoChromaThreshold = $0 }
+                            ), in: 0.0...1.0, step: 0.01)
+                        }
+
+                        VStack(alignment: .leading) {
+                            Text("縁のぼかし: \(Int(mediaVM.videoChromaSmoothness * 100))%")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoChromaSmoothness },
+                                set: { mediaVM.videoChromaSmoothness = $0 }
+                            ), in: 0.0...0.5, step: 0.01)
+                        }
+                    }
+
+                    // Foreground extraction (Vision 被写体マスク, 試作)
+                    Toggle("前景抽出 (被写体, 試作)", isOn: Binding(
+                        get: { mediaVM.videoForegroundKeyEnabled },
+                        set: {
+                            mediaVM.videoForegroundKeyEnabled = $0
+                            mediaVM.videoVersion += 1 // パイプライン/マスク有効化のため作り直す
+                        }
+                    ))
+                    .toggleStyle(.switch)
+
+                    if mediaVM.videoForegroundKeyEnabled {
+                        Text("被写体を残し背景を透明化（数フレームに1回マスク生成。動きの速い部分は輪郭が遅れます）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        VStack(alignment: .leading) {
+                            Text("抽出しきい値: \(Int(mediaVM.videoForegroundThreshold * 100))%")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoForegroundThreshold },
+                                set: { mediaVM.videoForegroundThreshold = $0 }
+                            ), in: 0.0...1.0, step: 0.01)
+                        }
+
+                        VStack(alignment: .leading) {
+                            Text("縁のぼかし: \(Int(mediaVM.videoForegroundFeather * 100))%")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoForegroundFeather },
+                                set: { mediaVM.videoForegroundFeather = $0 }
+                            ), in: 0.0...0.3, step: 0.01)
+                        }
+                    }
+
+                    // FPS デバッグ表示 (背景透過モード時)
+                    if mediaVM.videoBackgroundRemovalEnabled || mediaVM.videoForegroundKeyEnabled {
+                        HStack(spacing: 12) {
+                            Label(String(format: "描画 %.0f fps", mediaVM.videoMeasuredFPS), systemImage: "speedometer")
+                            if mediaVM.videoForegroundKeyEnabled {
+                                Label(String(format: "マスク %.1f fps", mediaVM.videoMaskFPS), systemImage: "person.crop.rectangle")
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+
                     // Vertical bob controls
                     Toggle("上下運動", isOn: Binding(
                         get: { mediaVM.videoBobEnabled },
@@ -846,6 +952,14 @@ struct ContentView: View {
     /// パネル湾曲スライダーの数値ラベル。0 近傍はフラット表記、それ以外は方向 + 倍率。
     private var slideshowCurveLabel: String {
         let v = mediaVM.slideshowCurveAmount
+        if abs(v) < 0.01 { return "まっすぐ" }
+        let pct = Int(round(abs(v) * 100))
+        return v > 0 ? "こちら向き \(pct)%" : "奥向き \(pct)%"
+    }
+
+    /// 動画パネル湾曲スライダーの数値ラベル。
+    private var videoCurveLabel: String {
+        let v = mediaVM.videoCurveAmount
         if abs(v) < 0.01 { return "まっすぐ" }
         let pct = Int(round(abs(v) * 100))
         return v > 0 ? "こちら向き \(pct)%" : "奥向き \(pct)%"

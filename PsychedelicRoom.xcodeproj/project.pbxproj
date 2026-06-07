@@ -24,6 +24,8 @@
 		A1000015 /* IllustServerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000017 /* IllustServerClient.swift */; };
 		A1000016 /* TagPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000018 /* TagPickerView.swift */; };
 		A1000017 /* MemoryMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000019 /* MemoryMonitor.swift */; };
+		A1000018 /* StereoVideoFramePump.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000020 /* StereoVideoFramePump.swift */; };
+		A1000019 /* StereoFrameExtractor.m in Sources */ = {isa = PBXBuildFile; fileRef = A2000021 /* StereoFrameExtractor.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -46,6 +48,10 @@
 		A2000017 /* IllustServerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IllustServerClient.swift; sourceTree = "<group>"; };
 		A2000018 /* TagPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TagPickerView.swift; sourceTree = "<group>"; };
 		A2000019 /* MemoryMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryMonitor.swift; sourceTree = "<group>"; };
+		A2000020 /* StereoVideoFramePump.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StereoVideoFramePump.swift; sourceTree = "<group>"; };
+		A2000021 /* StereoFrameExtractor.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = StereoFrameExtractor.m; sourceTree = "<group>"; };
+		A2000022 /* StereoFrameExtractor.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = StereoFrameExtractor.h; sourceTree = "<group>"; };
+		A2000023 /* PsychedelicRoom-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "PsychedelicRoom-Bridging-Header.h"; sourceTree = "<group>"; };
 		AB000001 /* RealityKitContent */ = {isa = PBXFileReference; lastKnownFileType = folder; name = RealityKitContent; path = Packages/RealityKitContent; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -87,6 +93,10 @@
 				A2000017 /* IllustServerClient.swift */,
 				A2000018 /* TagPickerView.swift */,
 				A2000019 /* MemoryMonitor.swift */,
+				A2000020 /* StereoVideoFramePump.swift */,
+				A2000021 /* StereoFrameExtractor.m */,
+				A2000022 /* StereoFrameExtractor.h */,
+				A2000023 /* PsychedelicRoom-Bridging-Header.h */,
 				A4000004 /* Shaders */,
 				A2000008 /* Info.plist */,
 				A2000009 /* PsychedelicRoom.entitlements */,
@@ -205,6 +215,8 @@
 				A1000015 /* IllustServerClient.swift in Sources */,
 				A1000016 /* TagPickerView.swift in Sources */,
 				A1000017 /* MemoryMonitor.swift in Sources */,
+				A1000018 /* StereoVideoFramePump.swift in Sources */,
+				A1000019 /* StereoFrameExtractor.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -290,6 +302,7 @@
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "xros xrsimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "PsychedelicRoom/PsychedelicRoom-Bridging-Header.h";
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = 7;
 			};
@@ -319,6 +332,7 @@
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SUPPORTED_PLATFORMS = "xros xrsimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "PsychedelicRoom/PsychedelicRoom-Bridging-Header.h";
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = 7;
 			};

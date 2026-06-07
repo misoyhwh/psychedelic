@@ -97,8 +97,25 @@ class MediaPanelViewModel {
     var videoURL: URL? = nil
     var isVideoPlaying: Bool = false
     var videoSize: CGSize = CGSize(width: 1.92, height: 1.08)
+
+    // 動画 背景透過 (試作)。立体視フレームを自前テクスチャ化し StereoImageMaterial のクロマキーで抜く。
+    var videoBackgroundRemovalEnabled: Bool = false
+    var videoChromaKeyColor: SIMD3<Float> = SIMD3<Float>(0, 1, 0)
+    var videoChromaThreshold: Float = 0.4
+    var videoChromaSmoothness: Float = 0.1
+
+    // 動画 前景抽出 (試作)。Vision の被写体マスクを数フレームに1回・非同期生成して背景を抜く。
+    var videoForegroundKeyEnabled: Bool = false
+    var videoForegroundThreshold: Float = 0.5
+    var videoForegroundFeather: Float = 0.05
+
+    // 背景透過モードの計測値 (デバッグ表示用)。
+    var videoMeasuredFPS: Double = 0
+    var videoMaskFPS: Double = 0
     var videoRotationH: Float = 0
     var videoRotationV: Float = 0
+    /// パネル湾曲量。0 = フラット、正値 = こちら向きに弧 (concave)、負値 = 奥向きに弧 (convex)。範囲は -1.0...1.0。
+    var videoCurveAmount: Float = 0
     var videoBobEnabled: Bool = false
     var videoBobAmplitude: Float = 0.3    // vertical meters (0.05...1.0)
     var videoBobSpeed: Float = 0.2        // cycles per second (0.02...0.5)

@@ -2,6 +2,7 @@ import SwiftUI
 import RealityKit
 @preconcurrency import ARKit
 import RealityKitContent
+import AVFoundation
 
 struct ImmersiveView: View {
     @Environment(AppModel.self) private var appModel
@@ -13,6 +14,7 @@ struct ImmersiveView: View {
     // Video panel entities
     @State private var videoRootEntity = Entity()
     @State private var videoEntity: ModelEntity?
+    @State private var videoFramePump: StereoVideoFramePump? = StereoVideoFramePump()
     @State private var videoInitialScale: Float = 1.0
     @State private var videoBobBaseY: Float = 1.5
     @State private var videoSurgeBaseZ: Float = -2.0
@@ -52,9 +54,17 @@ struct ImmersiveView: View {
             let _ = mediaVM.isVideoPlaying
             let _ = mediaVM.videoRotationH
             let _ = mediaVM.videoRotationV
+            let _ = mediaVM.videoCurveAmount
             let _ = mediaVM.videoBobEnabled
             let _ = mediaVM.videoSurgeEnabled
             let _ = mediaVM.videoSwayEnabled
+            let _ = mediaVM.videoBackgroundRemovalEnabled
+            let _ = mediaVM.videoChromaThreshold
+            let _ = mediaVM.videoChromaSmoothness
+            let _ = mediaVM.videoChromaKeyColor
+            let _ = mediaVM.videoForegroundKeyEnabled
+            let _ = mediaVM.videoForegroundThreshold
+            let _ = mediaVM.videoForegroundFeather
             let _ = mediaVM.slideshowTextureVersion
             let _ = mediaVM.slideshowEnabled
             let _ = mediaVM.slideshowRotationH
@@ -136,6 +146,7 @@ struct ImmersiveView: View {
         .onDisappear {
             videoMotionTimer?.invalidate()
             videoMotionTimer = nil
+            videoFramePump?.detach()
         }
         .gesture(occlusionDragGesture)
         .gesture(panelDragGesture)
@@ -156,6 +167,9 @@ struct ImmersiveView: View {
         }
         .onChange(of: mediaVM.videoRotationV) {
             updateVideoRotation()
+        }
+        .onChange(of: mediaVM.videoCurveAmount) {
+            updateVideoMesh()
         }
         .onChange(of: mediaVM.videoBobEnabled) {
             updateVideoMotion()
@@ -204,6 +218,21 @@ struct ImmersiveView: View {
         .onChange(of: mediaVM.slideshowForegroundFeather) {
             updateSlideshowForegroundKey()
         }
+        .onChange(of: mediaVM.videoChromaThreshold) {
+            updateVideoChromaKey()
+        }
+        .onChange(of: mediaVM.videoChromaSmoothness) {
+            updateVideoChromaKey()
+        }
+        .onChange(of: mediaVM.videoChromaKeyColor) {
+            updateVideoChromaKey()
+        }
+        .onChange(of: mediaVM.videoForegroundThreshold) {
+            updateVideoForegroundKey()
+        }
+        .onChange(of: mediaVM.videoForegroundFeather) {
+            updateVideoForegroundKey()
+        }
     }
 
     // MARK: - Video Entity
@@ -215,28 +244,138 @@ struct ImmersiveView: View {
         }
         videoEntity = nil
 
-        guard let player = mediaVM.player else { return }
+        guard let player = mediaVM.player else {
+            videoFramePump?.detach()
+            return
+        }
 
         let width = Float(mediaVM.videoSize.width)
         let height = Float(mediaVM.videoSize.height)
+        let mesh = makeCurvedPanelMesh(width: width, height: height, curve: mediaVM.videoCurveAmount)
 
-        let mesh = MeshResource.generatePlane(width: width, height: height)
+        if (mediaVM.videoBackgroundRemovalEnabled || mediaVM.videoForegroundKeyEnabled), let pump = videoFramePump {
+            recreateVideoEntityWithBackgroundRemoval(player: player, pump: pump, mesh: mesh, width: width, height: height)
+            return
+        }
+
+        // 通常表示: VideoMaterial (透過なし)。
+        videoFramePump?.detach()
         let material = VideoMaterial(avPlayer: player)
         let entity = ModelEntity(mesh: mesh, materials: [material])
-
         entity.components.set(CollisionComponent(shapes: [.generateBox(width: width, height: height, depth: 0.01)]))
         entity.components.set(InputTargetComponent(allowedInputTypes: .all))
         entity.name = "videoPanel"
-
         videoRootEntity.addChild(entity)
         videoEntity = entity
-        print("Video entity created: \(width)x\(height)")
+        print("Video entity created (VideoMaterial): \(width)x\(height)")
+    }
+
+    /// 背景透過モード: StereoImageMaterial にフレームポンプの左右テクスチャを流す。
+    private func recreateVideoEntityWithBackgroundRemoval(
+        player: AVPlayer, pump: StereoVideoFramePump,
+        mesh: MeshResource, width: Float, height: Float
+    ) {
+        Task {
+            var material: RealityKit.Material
+            do {
+                var m = try await ShaderGraphMaterial(
+                    named: "/Root/StereoImageMaterial",
+                    from: "StereoImageMaterial",
+                    in: realityKitContentBundle
+                )
+                applyVideoChromaParameters(to: &m)
+                applyVideoForegroundParameters(to: &m)
+                try? m.setParameter(name: "MaskEnable", value: .float(0)) // マスク生成完了まで全表示
+                material = m
+            } catch {
+                print("Failed to load video stereo material: \(error)")
+                material = UnlitMaterial(color: .black)
+            }
+
+            for child in videoRootEntity.children { child.removeFromParent() }
+            let entity = ModelEntity(mesh: mesh, materials: [material])
+            entity.components.set(CollisionComponent(shapes: [.generateBox(width: width, height: height, depth: 0.01)]))
+            entity.components.set(InputTargetComponent(allowedInputTypes: .all))
+            entity.name = "videoPanel"
+            videoRootEntity.addChild(entity)
+            videoEntity = entity
+
+            // 最初のフレームでテクスチャが用意できたら LeftImage/RightImage をバインド。
+            pump.onTexturesReady = { [weak entity, weak pump] in
+                guard let entity, let pump,
+                      var m = entity.model?.materials.first as? ShaderGraphMaterial else { return }
+                if let lt = pump.leftTexture {
+                    try? m.setParameter(name: "LeftImage", value: .textureResource(lt))
+                }
+                if let rt = pump.rightTexture ?? pump.leftTexture {
+                    try? m.setParameter(name: "RightImage", value: .textureResource(rt))
+                }
+                entity.model?.materials = [m]
+            }
+
+            // 前景マスクが更新されるたびに LeftMask/RightMask を再バインド (左右個別)。
+            pump.foregroundEnabled = mediaVM.videoForegroundKeyEnabled
+            pump.onMaskUpdated = { [weak entity, weak pump] in
+                guard let entity, let pump,
+                      var m = entity.model?.materials.first as? ShaderGraphMaterial,
+                      let leftMask = pump.maskLeftTexture else { return }
+                let rightMask = pump.maskRightTexture ?? leftMask // モノラルは左で代用
+                try? m.setParameter(name: "LeftMask", value: .textureResource(leftMask))
+                try? m.setParameter(name: "RightMask", value: .textureResource(rightMask))
+                try? m.setParameter(name: "MaskEnable", value: .float(pump.foregroundEnabled ? 1.0 : 0.0))
+                entity.model?.materials = [m]
+            }
+
+            // FPS 計測をビューモデルへ反映 (デバッグ表示用)。
+            pump.onStats = { displayFPS, maskFPS in
+                mediaVM.videoMeasuredFPS = displayFPS
+                mediaVM.videoMaskFPS = maskFPS
+            }
+            pump.attach(to: player)
+            print("Video entity created (background removal): \(width)x\(height)")
+        }
+    }
+
+    private func applyVideoChromaParameters(to material: inout ShaderGraphMaterial) {
+        let c = mediaVM.videoChromaKeyColor
+        let key = CGColor(red: CGFloat(c.x), green: CGFloat(c.y), blue: CGFloat(c.z), alpha: 1)
+        try? material.setParameter(name: "KeyColor", value: .color(key))
+        try? material.setParameter(name: "Threshold", value: .float(mediaVM.videoChromaThreshold))
+        try? material.setParameter(name: "Smoothness", value: .float(mediaVM.videoChromaSmoothness))
+        try? material.setParameter(name: "ChromaEnable", value: .float(mediaVM.videoBackgroundRemovalEnabled ? 1.0 : 0.0))
+    }
+
+    private func updateVideoChromaKey() {
+        guard let entity = videoEntity,
+              var material = entity.model?.materials.first as? ShaderGraphMaterial else { return }
+        applyVideoChromaParameters(to: &material)
+        entity.model?.materials = [material]
+    }
+
+    private func applyVideoForegroundParameters(to material: inout ShaderGraphMaterial) {
+        try? material.setParameter(name: "MaskThreshold", value: .float(mediaVM.videoForegroundThreshold))
+        try? material.setParameter(name: "MaskFeather", value: .float(mediaVM.videoForegroundFeather))
+    }
+
+    private func updateVideoForegroundKey() {
+        guard let entity = videoEntity,
+              var material = entity.model?.materials.first as? ShaderGraphMaterial else { return }
+        applyVideoForegroundParameters(to: &material)
+        entity.model?.materials = [material]
     }
 
     private func updateVideoVisibility() {
         let shouldShow = mediaVM.videoEnabled && mediaVM.player != nil
         videoRootEntity.isEnabled = shouldShow
         print("Video visibility: \(shouldShow), enabled=\(mediaVM.videoEnabled), player=\(mediaVM.player != nil)")
+    }
+
+    /// 既存 video entity のメッシュを湾曲量に合わせて差し替える (entity 再生成なし)。
+    private func updateVideoMesh() {
+        guard let entity = videoEntity else { return }
+        let width = Float(mediaVM.videoSize.width)
+        let height = Float(mediaVM.videoSize.height)
+        entity.model?.mesh = makeCurvedPanelMesh(width: width, height: height, curve: mediaVM.videoCurveAmount)
     }
 
     // MARK: - Slideshow Panel Curve
@@ -248,7 +387,7 @@ struct ImmersiveView: View {
         guard let entity = slideshowEntity else { return }
         let width = Float(mediaVM.slideshowDisplaySize.width)
         let height = Float(mediaVM.slideshowDisplaySize.height)
-        let mesh = makeSlideshowPanelMesh(
+        let mesh = makeCurvedPanelMesh(
             width: width,
             height: height,
             curve: mediaVM.slideshowCurveAmount
@@ -258,7 +397,7 @@ struct ImmersiveView: View {
 
     /// curve = 0 でフラット、>0 でこちら向きの凹面、<0 で奥向きの凸面の
     /// 円筒セクションメッシュを生成する。湾曲は水平方向のみで縦は直線。
-    private func makeSlideshowPanelMesh(width: Float, height: Float, curve: Float) -> MeshResource {
+    private func makeCurvedPanelMesh(width: Float, height: Float, curve: Float) -> MeshResource {
         // ほぼ 0 ならフラットなプレーンに退避 (除算 0 回避)。
         if abs(curve) < 0.01 {
             return MeshResource.generatePlane(width: width, height: height)
@@ -395,7 +534,7 @@ struct ImmersiveView: View {
         let height = Float(mediaVM.slideshowDisplaySize.height)
 
         Task {
-            let mesh = makeSlideshowPanelMesh(
+            let mesh = makeCurvedPanelMesh(
                 width: width,
                 height: height,
                 curve: mediaVM.slideshowCurveAmount
