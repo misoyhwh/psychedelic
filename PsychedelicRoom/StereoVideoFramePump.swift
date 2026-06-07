@@ -182,11 +182,16 @@ final class StereoVideoFramePump {
         }
     }
 
+    /// CIContext は生成コストが高いので使い回す (毎フレーム作らない)。CIContext はレンダリング的に
+    /// スレッドセーフなので nonisolated(unsafe) で共有して問題ない。
+    nonisolated(unsafe) private static let sharedCIContext = CIContext(options: nil)
+
     /// 被写体マスクを生成して CGImage で返す。重い同期処理 (バックグラウンドで呼ぶこと)。
     nonisolated private static func computeMaskCGImage(from buffer: CVPixelBuffer) -> CGImage? {
-        let context = CIContext(options: nil)
-        // ~512px に縮小して Vision コストを抑える (マスク更新レート優先)。
-        let maskInputMaxDim: CGFloat = 512
+        let context = sharedCIContext
+        // モデルは内部固定解像度で推論するため、入力縮小は速度にほぼ効かない。
+        // メモリ/転送だけ抑える目的で 768px に。
+        let maskInputMaxDim: CGFloat = 768
         let ci = CIImage(cvPixelBuffer: buffer)
         let maxDim = max(ci.extent.width, ci.extent.height)
         let scale = maxDim > maskInputMaxDim ? maskInputMaxDim / maxDim : 1.0
