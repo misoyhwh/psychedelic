@@ -131,7 +131,7 @@ final class StereoVideoFramePump {
         displayFrameCount += 1
         tickStats()
 
-        maybeGenerateMask(left: left, right: pair.right)
+        maybeGenerateMask(left: left)
     }
 
     /// 1秒窓で描画/マスクのレートを集計し onStats へ通知する。
@@ -146,35 +146,27 @@ final class StereoVideoFramePump {
         statsWindowStart = now
     }
 
-    // MARK: - Foreground mask (throttled, async, per-eye)
+    // MARK: - Foreground mask (throttled, async, 左目を両眼共用)
 
-    private func maybeGenerateMask(left: CVPixelBuffer?, right: CVPixelBuffer?) {
+    private func maybeGenerateMask(left: CVPixelBuffer?) {
         guard foregroundEnabled, let left else { return }
         frameCounter &+= 1
         guard frameCounter % maskInterval == 0, !maskInFlight else { return }
         maskInFlight = true
         nonisolated(unsafe) let lb = left
-        nonisolated(unsafe) let rb = right
-        // 外側は MainActor (self 触れる)、Vision (左右2回) だけ detached でバックグラウンドへ。
+        // 推論回数を1回に抑える (マスク更新レート優先)。左目マスクを両眼で共用する。
         Task { [weak self] in
-            let masks = await Task.detached(priority: .userInitiated) { () -> (CGImage?, CGImage?) in
-                let l = StereoVideoFramePump.computeMaskCGImage(from: lb)
-                let r: CGImage?
-                if let rb { r = StereoVideoFramePump.computeMaskCGImage(from: rb) } else { r = nil }
-                return (l, r)
+            let leftCG = await Task.detached(priority: .userInitiated) {
+                StereoVideoFramePump.computeMaskCGImage(from: lb)
             }.value
             var lt: TextureResource?
-            var rt: TextureResource?
-            if let lcg = masks.0 {
-                lt = try? await TextureResource(image: lcg, options: .init(semantic: .raw))
-            }
-            if let rcg = masks.1 {
-                rt = try? await TextureResource(image: rcg, options: .init(semantic: .raw))
+            if let leftCG {
+                lt = try? await TextureResource(image: leftCG, options: .init(semantic: .raw))
             }
             guard let self else { return }
-            if lt != nil || rt != nil {
+            if let lt {
                 self.maskLeftTexture = lt
-                self.maskRightTexture = rt
+                self.maskRightTexture = nil // nil の時は binding 側が left を両眼へ使う
                 self.maskFrameCount += 1
                 self.onMaskUpdated?()
             }
