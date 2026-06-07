@@ -103,6 +103,11 @@ class MediaPanelViewModel {
     var videoChromaKeyColor: SIMD3<Float> = SIMD3<Float>(0, 1, 0)
     var videoChromaThreshold: Float = 0.4
     var videoChromaSmoothness: Float = 0.1
+
+    // 動画 前景抽出 (試作)。Vision の被写体マスクを数フレームに1回・非同期生成して背景を抜く。
+    var videoForegroundKeyEnabled: Bool = false
+    var videoForegroundThreshold: Float = 0.5
+    var videoForegroundFeather: Float = 0.05
     var videoRotationH: Float = 0
     var videoRotationV: Float = 0
     var videoBobEnabled: Bool = false

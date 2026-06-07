@@ -4,6 +4,8 @@ import Metal
 import CoreVideo
 import CoreMedia
 import QuartzCore
+import Vision
+import CoreImage
 
 /// 立体視動画(MV-HEVC)の左右フレームを毎フレーム取り出し、2枚の TextureResource を更新する。
 /// VideoMaterial では透過シェーダを被せられないため、ここで自前テクスチャ化して
@@ -30,6 +32,15 @@ final class StereoVideoFramePump {
 
     /// 最初のフレームでテクスチャが用意できた時に 1 回呼ばれる。マテリアルへのバインドに使う。
     var onTexturesReady: (() -> Void)?
+
+    // 前景抽出 (Vision)。重いので数フレームに1回・非同期生成し、左目マスクを両眼で共用する。
+    var foregroundEnabled = false
+    private(set) var maskTexture: TextureResource?
+    /// マスクが更新された時に呼ばれる。マテリアルへの再バインドに使う。
+    var onMaskUpdated: (() -> Void)?
+    private var frameCounter = 0
+    private var maskInFlight = false
+    private let maskInterval = 6 // 約 N 表示フレームに1回マスク生成
 
     var isActive: Bool { output != nil }
 
@@ -68,6 +79,8 @@ final class StereoVideoFramePump {
         leftTexture = nil
         rightTexture = nil
         textureSize = nil
+        maskTexture = nil
+        frameCounter = 0
     }
 
     private func startDisplayLink() {
@@ -102,6 +115,56 @@ final class StereoVideoFramePump {
 
         if let left { updateTexture(leftLLT, from: left) }
         if let right { updateTexture(rightLLT, from: right) }
+
+        maybeGenerateMask(left: left)
+    }
+
+    // MARK: - Foreground mask (throttled, async)
+
+    private func maybeGenerateMask(left: CVPixelBuffer?) {
+        guard foregroundEnabled, let left else { return }
+        frameCounter &+= 1
+        guard frameCounter % maskInterval == 0, !maskInFlight else { return }
+        maskInFlight = true
+        nonisolated(unsafe) let buffer = left
+        // 外側は MainActor (self 触れる)、重い処理だけ detached でバックグラウンドへ。
+        Task { [weak self] in
+            let maskCG = await Task.detached(priority: .userInitiated) {
+                StereoVideoFramePump.computeMaskCGImage(from: buffer)
+            }.value
+            var tex: TextureResource?
+            if let maskCG {
+                tex = try? await TextureResource(image: maskCG, options: .init(semantic: .raw))
+            }
+            guard let self else { return }
+            if let tex {
+                self.maskTexture = tex
+                self.onMaskUpdated?()
+            }
+            self.maskInFlight = false
+        }
+    }
+
+    /// 被写体マスクを生成して CGImage で返す。重い同期処理 (バックグラウンドで呼ぶこと)。
+    nonisolated private static func computeMaskCGImage(from buffer: CVPixelBuffer) -> CGImage? {
+        let context = CIContext(options: nil)
+        // ~1024px に縮小して Vision コストを抑える。
+        let ci = CIImage(cvPixelBuffer: buffer)
+        let maxDim = max(ci.extent.width, ci.extent.height)
+        let scale = maxDim > 1024 ? 1024.0 / maxDim : 1.0
+        let scaled = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let cg = context.createCGImage(scaled, from: scaled.extent) else { return nil }
+        let request = VNGenerateForegroundInstanceMaskRequest()
+        let handler = VNImageRequestHandler(cgImage: cg, options: [:])
+        do {
+            try handler.perform([request])
+            guard let result = request.results?.first, !result.allInstances.isEmpty else { return nil }
+            let mask = try result.generateScaledMaskForImage(forInstances: result.allInstances, from: handler)
+            let mci = CIImage(cvPixelBuffer: mask)
+            return context.createCGImage(mci, from: mci.extent)
+        } catch {
+            return nil
+        }
     }
 
     private func createTextures(width: Int, height: Int) {

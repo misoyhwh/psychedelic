@@ -566,6 +566,38 @@ struct ContentView: View {
                         }
                     }
 
+                    // Foreground extraction (Vision 被写体マスク, 試作)
+                    Toggle("前景抽出 (被写体, 試作)", isOn: Binding(
+                        get: { mediaVM.videoForegroundKeyEnabled },
+                        set: {
+                            mediaVM.videoForegroundKeyEnabled = $0
+                            mediaVM.videoVersion += 1 // パイプライン/マスク有効化のため作り直す
+                        }
+                    ))
+                    .toggleStyle(.switch)
+
+                    if mediaVM.videoForegroundKeyEnabled {
+                        Text("被写体を残し背景を透明化（数フレームに1回マスク生成。動きの速い部分は輪郭が遅れます）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        VStack(alignment: .leading) {
+                            Text("抽出しきい値: \(Int(mediaVM.videoForegroundThreshold * 100))%")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoForegroundThreshold },
+                                set: { mediaVM.videoForegroundThreshold = $0 }
+                            ), in: 0.0...1.0, step: 0.01)
+                        }
+
+                        VStack(alignment: .leading) {
+                            Text("縁のぼかし: \(Int(mediaVM.videoForegroundFeather * 100))%")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoForegroundFeather },
+                                set: { mediaVM.videoForegroundFeather = $0 }
+                            ), in: 0.0...0.3, step: 0.01)
+                        }
+                    }
+
                     // Vertical bob controls
                     Toggle("上下運動", isOn: Binding(
                         get: { mediaVM.videoBobEnabled },

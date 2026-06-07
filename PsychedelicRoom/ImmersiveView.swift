@@ -61,6 +61,9 @@ struct ImmersiveView: View {
             let _ = mediaVM.videoChromaThreshold
             let _ = mediaVM.videoChromaSmoothness
             let _ = mediaVM.videoChromaKeyColor
+            let _ = mediaVM.videoForegroundKeyEnabled
+            let _ = mediaVM.videoForegroundThreshold
+            let _ = mediaVM.videoForegroundFeather
             let _ = mediaVM.slideshowTextureVersion
             let _ = mediaVM.slideshowEnabled
             let _ = mediaVM.slideshowRotationH
@@ -220,6 +223,12 @@ struct ImmersiveView: View {
         .onChange(of: mediaVM.videoChromaKeyColor) {
             updateVideoChromaKey()
         }
+        .onChange(of: mediaVM.videoForegroundThreshold) {
+            updateVideoForegroundKey()
+        }
+        .onChange(of: mediaVM.videoForegroundFeather) {
+            updateVideoForegroundKey()
+        }
     }
 
     // MARK: - Video Entity
@@ -240,7 +249,7 @@ struct ImmersiveView: View {
         let height = Float(mediaVM.videoSize.height)
         let mesh = MeshResource.generatePlane(width: width, height: height)
 
-        if mediaVM.videoBackgroundRemovalEnabled, let pump = videoFramePump {
+        if (mediaVM.videoBackgroundRemovalEnabled || mediaVM.videoForegroundKeyEnabled), let pump = videoFramePump {
             recreateVideoEntityWithBackgroundRemoval(player: player, pump: pump, mesh: mesh, width: width, height: height)
             return
         }
@@ -271,7 +280,8 @@ struct ImmersiveView: View {
                     in: realityKitContentBundle
                 )
                 applyVideoChromaParameters(to: &m)
-                try? m.setParameter(name: "MaskEnable", value: .float(0)) // 前景抽出は動画では未対応
+                applyVideoForegroundParameters(to: &m)
+                try? m.setParameter(name: "MaskEnable", value: .float(0)) // マスク生成完了まで全表示
                 material = m
             } catch {
                 print("Failed to load video stereo material: \(error)")
@@ -298,6 +308,18 @@ struct ImmersiveView: View {
                 }
                 entity.model?.materials = [m]
             }
+
+            // 前景マスクが更新されるたびに LeftMask/RightMask を再バインド (左目マスクを両眼共用)。
+            pump.foregroundEnabled = mediaVM.videoForegroundKeyEnabled
+            pump.onMaskUpdated = { [weak entity, weak pump] in
+                guard let entity, let pump,
+                      var m = entity.model?.materials.first as? ShaderGraphMaterial,
+                      let mask = pump.maskTexture else { return }
+                try? m.setParameter(name: "LeftMask", value: .textureResource(mask))
+                try? m.setParameter(name: "RightMask", value: .textureResource(mask))
+                try? m.setParameter(name: "MaskEnable", value: .float(pump.foregroundEnabled ? 1.0 : 0.0))
+                entity.model?.materials = [m]
+            }
             pump.attach(to: player)
             print("Video entity created (background removal): \(width)x\(height)")
         }
@@ -316,6 +338,18 @@ struct ImmersiveView: View {
         guard let entity = videoEntity,
               var material = entity.model?.materials.first as? ShaderGraphMaterial else { return }
         applyVideoChromaParameters(to: &material)
+        entity.model?.materials = [material]
+    }
+
+    private func applyVideoForegroundParameters(to material: inout ShaderGraphMaterial) {
+        try? material.setParameter(name: "MaskThreshold", value: .float(mediaVM.videoForegroundThreshold))
+        try? material.setParameter(name: "MaskFeather", value: .float(mediaVM.videoForegroundFeather))
+    }
+
+    private func updateVideoForegroundKey() {
+        guard let entity = videoEntity,
+              var material = entity.model?.materials.first as? ShaderGraphMaterial else { return }
+        applyVideoForegroundParameters(to: &material)
         entity.model?.materials = [material]
     }
 
