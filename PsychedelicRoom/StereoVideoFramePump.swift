@@ -43,6 +43,12 @@ final class StereoVideoFramePump {
     private var maskInFlight = false
     private let maskInterval = 6 // 約 N 表示フレームに1回マスク生成
 
+    // FPS 計測 (1秒窓): 描画(フレーム更新)レートとマスク更新レート。
+    var onStats: ((_ displayFPS: Double, _ maskFPS: Double) -> Void)?
+    private var displayFrameCount = 0
+    private var maskFrameCount = 0
+    private var statsWindowStart: CFTimeInterval = 0
+
     var isActive: Bool { output != nil }
 
     init?() {
@@ -83,6 +89,10 @@ final class StereoVideoFramePump {
         maskLeftTexture = nil
         maskRightTexture = nil
         frameCounter = 0
+        displayFrameCount = 0
+        maskFrameCount = 0
+        statsWindowStart = 0
+        onStats?(0, 0)
     }
 
     private func startDisplayLink() {
@@ -118,7 +128,22 @@ final class StereoVideoFramePump {
         if let left { updateTexture(leftLLT, from: left) }
         if let right { updateTexture(rightLLT, from: right) }
 
+        displayFrameCount += 1
+        tickStats()
+
         maybeGenerateMask(left: left, right: pair.right)
+    }
+
+    /// 1秒窓で描画/マスクのレートを集計し onStats へ通知する。
+    private func tickStats() {
+        let now = CACurrentMediaTime()
+        if statsWindowStart == 0 { statsWindowStart = now; return }
+        let elapsed = now - statsWindowStart
+        guard elapsed >= 1.0 else { return }
+        onStats?(Double(displayFrameCount) / elapsed, Double(maskFrameCount) / elapsed)
+        displayFrameCount = 0
+        maskFrameCount = 0
+        statsWindowStart = now
     }
 
     // MARK: - Foreground mask (throttled, async, per-eye)
@@ -150,6 +175,7 @@ final class StereoVideoFramePump {
             if lt != nil || rt != nil {
                 self.maskLeftTexture = lt
                 self.maskRightTexture = rt
+                self.maskFrameCount += 1
                 self.onMaskUpdated?()
             }
             self.maskInFlight = false

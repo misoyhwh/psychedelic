@@ -325,6 +325,12 @@ struct ImmersiveView: View {
                 try? m.setParameter(name: "MaskEnable", value: .float(pump.foregroundEnabled ? 1.0 : 0.0))
                 entity.model?.materials = [m]
             }
+
+            // FPS 計測をビューモデルへ反映 (デバッグ表示用)。
+            pump.onStats = { displayFPS, maskFPS in
+                mediaVM.videoMeasuredFPS = displayFPS
+                mediaVM.videoMaskFPS = maskFPS
+            }
             pump.attach(to: player)
             print("Video entity created (background removal): \(width)x\(height)")
         }

@@ -613,6 +613,18 @@ struct ContentView: View {
                         }
                     }
 
+                    // FPS デバッグ表示 (背景透過モード時)
+                    if mediaVM.videoBackgroundRemovalEnabled || mediaVM.videoForegroundKeyEnabled {
+                        HStack(spacing: 12) {
+                            Label(String(format: "描画 %.0f fps", mediaVM.videoMeasuredFPS), systemImage: "speedometer")
+                            if mediaVM.videoForegroundKeyEnabled {
+                                Label(String(format: "マスク %.1f fps", mediaVM.videoMaskFPS), systemImage: "person.crop.rectangle")
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+
                     // Vertical bob controls
                     Toggle("上下運動", isOn: Binding(
                         get: { mediaVM.videoBobEnabled },

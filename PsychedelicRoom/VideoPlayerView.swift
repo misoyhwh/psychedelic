@@ -108,6 +108,10 @@ class MediaPanelViewModel {
     var videoForegroundKeyEnabled: Bool = false
     var videoForegroundThreshold: Float = 0.5
     var videoForegroundFeather: Float = 0.05
+
+    // 背景透過モードの計測値 (デバッグ表示用)。
+    var videoMeasuredFPS: Double = 0
+    var videoMaskFPS: Double = 0
     var videoRotationH: Float = 0
     var videoRotationV: Float = 0
     /// パネル湾曲量。0 = フラット、正値 = こちら向きに弧 (concave)、負値 = 奥向きに弧 (convex)。範囲は -1.0...1.0。
