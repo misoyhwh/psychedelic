@@ -429,6 +429,12 @@ struct ContentView: View {
                                 .truncationMode(.middle)
                                 .foregroundStyle(.secondary)
                         }
+                        if !currentVideoTags.isEmpty {
+                            Text(currentVideoTags.joined(separator: " · "))
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(3)
+                        }
                         Text("\(mediaVM.videoPlaylistIndex + 1) / \(mediaVM.videoPlaylist.count) 本")
                             .font(.caption)
 
@@ -774,6 +780,12 @@ struct ContentView: View {
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .foregroundStyle(.secondary)
+                    }
+                    if !currentSlideshowTags.isEmpty {
+                        Text(currentSlideshowTags.joined(separator: " · "))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(3)
                     }
                     Text("\(mediaVM.slideshowCurrentIndex + 1) / \(mediaVM.slideshowImages.count) 枚")
                         .font(.caption)
@@ -1212,6 +1224,20 @@ struct ContentView: View {
         let idx = mediaVM.videoPlaylistIndex
         guard idx >= 0, idx < mediaVM.videoPlaylist.count else { return nil }
         return mediaVM.videoPlaylist[idx].displayName
+    }
+
+    /// 現在表示中スライドショー画像のタグ (サーバ検索由来のみ)。
+    private var currentSlideshowTags: [String] {
+        let idx = mediaVM.slideshowCurrentIndex
+        guard idx >= 0, idx < mediaVM.slideshowImages.count else { return [] }
+        return mediaVM.slideshowImages[idx].tags ?? []
+    }
+
+    /// 現在再生中の動画のタグ (サーバ検索由来のみ)。
+    private var currentVideoTags: [String] {
+        let idx = mediaVM.videoPlaylistIndex
+        guard idx >= 0, idx < mediaVM.videoPlaylist.count else { return [] }
+        return mediaVM.videoPlaylist[idx].tags ?? []
     }
 
     // MARK: - Sort / Date Filter Controls (shared by slideshow & video)

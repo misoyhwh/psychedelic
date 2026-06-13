@@ -9,6 +9,8 @@ struct SlideshowImage {
     let url: URL
     /// 画面に表示するファイル名 (ローカル: lastPathComponent、リモート: asset.title or short hash)。nil 時は非表示。
     let displayName: String?
+    /// サーバ検索由来の場合、そのアセットのタグ。ローカル/未対応サーバでは nil。
+    var tags: [String]? = nil
     // stereo detection is deferred to load time
 }
 

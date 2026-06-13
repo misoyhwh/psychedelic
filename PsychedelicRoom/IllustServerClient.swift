@@ -21,6 +21,9 @@ struct IllustServerAsset: Codable, Identifiable, Sendable, Hashable {
     let sourceId: String?
     let sourceUserId: String?
     let sourceUserName: String?
+    /// このアセットに登録されたタグ ("namespace:name" 文字列の配列)。
+    /// サーバが /api/search のレスポンスに "tags" を含めた場合のみ入る (未対応サーバでは nil)。
+    let tags: [String]?
 
     var id: String { hash }
 
@@ -55,6 +58,7 @@ struct IllustServerAsset: Codable, Identifiable, Sendable, Hashable {
         case sourceId = "source_id"
         case sourceUserId = "source_user_id"
         case sourceUserName = "source_user_name"
+        case tags
     }
 }
 

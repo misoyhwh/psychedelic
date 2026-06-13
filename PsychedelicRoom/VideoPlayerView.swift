@@ -669,7 +669,8 @@ class MediaPanelViewModel {
                 var images = assets.map { asset -> SlideshowImage in
                     SlideshowImage(
                         url: client.mediaURL(hash: asset.hash),
-                        displayName: asset.displayName
+                        displayName: asset.displayName,
+                        tags: asset.tags
                     )
                 }
                 if sortOrder == .filename {
