@@ -433,7 +433,7 @@ struct ContentView: View {
                             Text(currentVideoTags.joined(separator: " · "))
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
-                                .lineLimit(3)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         Text("\(mediaVM.videoPlaylistIndex + 1) / \(mediaVM.videoPlaylist.count) 本")
                             .font(.caption)
@@ -785,7 +785,7 @@ struct ContentView: View {
                         Text(currentSlideshowTags.joined(separator: " · "))
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
-                            .lineLimit(3)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Text("\(mediaVM.slideshowCurrentIndex + 1) / \(mediaVM.slideshowImages.count) 枚")
                         .font(.caption)
