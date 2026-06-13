@@ -534,6 +534,18 @@ struct ContentView: View {
                         }
                     }
 
+                    // Repeat count (プレイリスト時、N回再生してから次へ)
+                    VStack(alignment: .leading) {
+                        Text("繰り返し再生: \(mediaVM.videoRepeatCount)回")
+                        Slider(value: Binding(
+                            get: { Double(mediaVM.videoRepeatCount) },
+                            set: { mediaVM.videoRepeatCount = Int($0) }
+                        ), in: 1...10, step: 1)
+                        Text("プレイリスト再生時、この回数を再生したら次の動画へ")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
                     // Background removal (立体視動画クロマキー, 試作)
                     Divider()
                     Toggle("背景透過 (クロマキー, 試作)", isOn: Binding(

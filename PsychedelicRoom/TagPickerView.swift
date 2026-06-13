@@ -26,7 +26,7 @@ struct TagPickerView: View {
 
     private let namespaces: [String] = ["character", "series", "general", "artist"]
     private let popularPerNamespace: Int = 90  // 30 → 90 (各カテゴリ 3 倍表示)
-    private let gridColumns: [GridItem] = [GridItem(.adaptive(minimum: 140), spacing: 6)]
+    private let gridColumns: [GridItem] = [GridItem(.adaptive(minimum: 220), spacing: 6)]
 
     var body: some View {
         @Bindable var appModel = appModel
@@ -77,7 +77,7 @@ struct TagPickerView: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 500, minHeight: 600)
+        .frame(minWidth: 760, minHeight: 600)
         .task {
             if popularByNamespace.isEmpty {
                 await loadPopular()
@@ -215,8 +215,9 @@ struct TagPickerView: View {
                         .imageScale(.small)
                 }
                 Text(label)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .font(.caption)
         }

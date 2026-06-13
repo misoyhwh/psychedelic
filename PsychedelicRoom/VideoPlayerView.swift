@@ -134,6 +134,10 @@ class MediaPanelViewModel {
     // Server video playlist state
     var videoPlaylist: [IllustServerAsset] = []
     var videoPlaylistIndex: Int = 0
+    /// 1本の動画を何回再生してから次へ進むか (プレイリスト時)。1 = 1回再生して次へ。
+    var videoRepeatCount: Int = 1
+    /// 現在の動画の再生済み回数 (loadVideo でリセット)。
+    private var videoCurrentPlayCount: Int = 0
     var videoServerSearchInProgress: Bool = false
     var videoServerSearchError: String? = nil
     var videoServerTotalCount: Int = 0
@@ -248,6 +252,7 @@ class MediaPanelViewModel {
         sizeReadyForEntity = false
 
         videoURL = url
+        videoCurrentPlayCount = 0
         let item = AVPlayerItem(url: url)
 
         // Add video output for color sampling
@@ -365,11 +370,19 @@ class MediaPanelViewModel {
 
     @MainActor
     private func onVideoEnded() {
+        videoCurrentPlayCount += 1
+        // 指定回数 (videoRepeatCount) 再生するまでは同じ動画を繰り返す。
+        if videoCurrentPlayCount < max(1, videoRepeatCount) {
+            player?.seek(to: .zero)
+            player?.play()
+            return
+        }
         if videoSourceMode == .serverSearch && !videoPlaylist.isEmpty {
-            // 次の動画へ自動切替
+            // 規定回数に達したら次の動画へ (loadVideo がカウントをリセット)。
             videoPlaylistNext()
         } else {
-            // Local: 同じ動画をループ
+            // Local: 次が無いので同じ動画をループ継続。
+            videoCurrentPlayCount = 0
             player?.seek(to: .zero)
             player?.play()
         }
