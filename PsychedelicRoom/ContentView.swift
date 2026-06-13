@@ -260,9 +260,6 @@ struct ContentView: View {
         .onReceive(memoryTimer) { _ in
             updateMemory()
         }
-        .task {
-            await StereoMaterialSelfTest.run()
-        }
     }
 
     private func updateMemory() {
