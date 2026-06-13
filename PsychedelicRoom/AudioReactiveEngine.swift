@@ -49,6 +49,9 @@ class AudioReactiveEngine {
         recorder?.stop()
         recorder?.deleteRecording()
         recorder = nil
+        // オーディオセッションを解放する。これをしないと .record セッションがマイクを
+        // 占有し続け、visionOS のキーボード(音声入力)が提示できず全テキスト入力がハングする。
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         isRunning = false
         audioLevel = 0
         bassLevel = 0
@@ -78,7 +81,8 @@ class AudioReactiveEngine {
 
         for (category, mode, label) in configs {
             do {
-                try session.setCategory(category, mode: mode)
+                // .mixWithOthers でマイクを排他占有せず、システム(キーボード等)と共存させる。
+                try session.setCategory(category, mode: mode, options: [.mixWithOthers])
                 try session.setActive(true)
                 print("AudioReactive: Session configured with \(label)")
                 break
