@@ -77,7 +77,7 @@ struct TagPickerView: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 1140, minHeight: 600)
+        .frame(minHeight: 600)
         .task {
             if popularByNamespace.isEmpty {
                 await loadPopular()
@@ -217,7 +217,6 @@ struct TagPickerView: View {
                 Text(label)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
             }
             .font(.caption)
         }
