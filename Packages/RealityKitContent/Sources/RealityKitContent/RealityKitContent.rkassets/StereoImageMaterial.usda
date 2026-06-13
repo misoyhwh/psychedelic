@@ -21,6 +21,7 @@ def Xform "Root"
         float inputs:MaskThreshold = 0.5
         float inputs:MaskFeather = 0.05
         token outputs:mtlx:surface.connect = </Root/StereoImageMaterial/UnlitSurface.outputs:out>
+        token outputs:realitykit:vertex
 
         def Shader "UnlitSurface"
         {
