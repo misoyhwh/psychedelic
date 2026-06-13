@@ -25,13 +25,13 @@ struct PsychedelicRoomApp: App {
             TagPickerView(target: .image)
                 .environment(appModel)
         }
-        .defaultSize(width: 600, height: 800)
+        .defaultSize(width: 1140, height: 800)
 
         WindowGroup(id: "VideoTagPickerWindow") {
             TagPickerView(target: .video)
                 .environment(appModel)
         }
-        .defaultSize(width: 600, height: 800)
+        .defaultSize(width: 1140, height: 800)
 
         ImmersiveSpace(id: "PsychedelicSpace") {
             ImmersiveView()

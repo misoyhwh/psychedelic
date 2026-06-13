@@ -287,8 +287,9 @@ struct ImmersiveView: View {
                 applyVideoForegroundParameters(to: &m)
                 try? m.setParameter(name: "MaskEnable", value: .float(0)) // マスク生成完了まで全表示
                 material = m
+                print("✅ [Stereo] StereoImageMaterial loaded OK (video)")
             } catch {
-                print("Failed to load video stereo material: \(error)")
+                print("❌ [Stereo] StereoImageMaterial FAILED (video) -> black fallback: \(error)")
                 material = UnlitMaterial(color: .black)
             }
 
@@ -556,8 +557,9 @@ struct ImmersiveView: View {
                 applyChromaParameters(to: &stereoMaterial)
                 applyForegroundParameters(to: &stereoMaterial)
                 material = stereoMaterial
+                print("✅ [Stereo] StereoImageMaterial loaded OK (image)")
             } catch {
-                print("Failed to load stereo material: \(error)")
+                print("❌ [Stereo] StereoImageMaterial FAILED (image) -> falling back to mono/opaque: \(error)")
                 var fallback = UnlitMaterial()
                 fallback.color = .init(tint: .white, texture: .init(leftTexture))
                 material = fallback

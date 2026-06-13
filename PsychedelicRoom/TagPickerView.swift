@@ -77,7 +77,7 @@ struct TagPickerView: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 760, minHeight: 600)
+        .frame(minWidth: 1140, minHeight: 600)
         .task {
             if popularByNamespace.isEmpty {
                 await loadPopular()
