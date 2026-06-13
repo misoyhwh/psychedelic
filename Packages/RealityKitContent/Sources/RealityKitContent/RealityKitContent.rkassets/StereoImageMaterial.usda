@@ -9,14 +9,14 @@ def Xform "Root"
 {
     def Material "StereoImageMaterial"
     {
-        asset inputs:LeftImage = @@
-        asset inputs:RightImage = @@
+        asset inputs:LeftImage = @placeholder.png@
+        asset inputs:RightImage = @placeholder.png@
         color3f inputs:KeyColor = (0, 1, 0)
         float inputs:Threshold = 0.4
         float inputs:Smoothness = 0.1
         float inputs:ChromaEnable = 0
-        asset inputs:LeftMask = @@
-        asset inputs:RightMask = @@
+        asset inputs:LeftMask = @placeholder.png@
+        asset inputs:RightMask = @placeholder.png@
         float inputs:MaskEnable = 0
         float inputs:MaskThreshold = 0.5
         float inputs:MaskFeather = 0.05
@@ -46,7 +46,7 @@ def Xform "Root"
         {
             uniform token info:id = "ND_image_color3"
             color3f inputs:default
-            asset inputs:file = @left.png@
+            asset inputs:file = @placeholder.png@
             asset inputs:file.connect = </Root/StereoImageMaterial.inputs:LeftImage>
             string inputs:filtertype = "linear"
             color3f outputs:out
@@ -56,7 +56,7 @@ def Xform "Root"
         {
             uniform token info:id = "ND_image_color3"
             color3f inputs:default
-            asset inputs:file = @right.png@
+            asset inputs:file = @placeholder.png@
             asset inputs:file.connect = </Root/StereoImageMaterial.inputs:RightImage>
             string inputs:filtertype = "linear"
             color3f outputs:out
@@ -135,7 +135,7 @@ def Xform "Root"
         {
             uniform token info:id = "ND_image_float"
             float inputs:default = 1
-            asset inputs:file = @left_mask.png@
+            asset inputs:file = @placeholder.png@
             asset inputs:file.connect = </Root/StereoImageMaterial.inputs:LeftMask>
             string inputs:filtertype = "linear"
             float outputs:out
@@ -145,7 +145,7 @@ def Xform "Root"
         {
             uniform token info:id = "ND_image_float"
             float inputs:default = 1
-            asset inputs:file = @right_mask.png@
+            asset inputs:file = @placeholder.png@
             asset inputs:file.connect = </Root/StereoImageMaterial.inputs:RightMask>
             string inputs:filtertype = "linear"
             float outputs:out
