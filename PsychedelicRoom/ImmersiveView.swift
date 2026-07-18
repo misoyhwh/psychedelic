@@ -20,6 +20,8 @@ struct ImmersiveView: View {
     @State private var videoSurgeBaseZ: Float = -2.0
     @State private var videoSwayBaseX: Float = 0.0
     @State private var videoMotionTimer: Timer?
+    @State private var handTracking = HandTrackingManager()
+    @State private var handFollowTimer: Timer?
     @State private var videoMotionStartTime: Date?
 
     // Slideshow panel entities
@@ -58,6 +60,8 @@ struct ImmersiveView: View {
             let _ = mediaVM.videoBobEnabled
             let _ = mediaVM.videoSurgeEnabled
             let _ = mediaVM.videoSwayEnabled
+            let _ = mediaVM.videoFollowHandEnabled
+            let _ = mediaVM.slideshowFollowHandEnabled
             let _ = mediaVM.videoBackgroundRemovalEnabled
             let _ = mediaVM.videoChromaThreshold
             let _ = mediaVM.videoChromaSmoothness
@@ -146,6 +150,9 @@ struct ImmersiveView: View {
         .onDisappear {
             videoMotionTimer?.invalidate()
             videoMotionTimer = nil
+            handFollowTimer?.invalidate()
+            handFollowTimer = nil
+            handTracking.stop()
             videoFramePump?.detach()
         }
         .gesture(occlusionDragGesture)
@@ -179,6 +186,12 @@ struct ImmersiveView: View {
         }
         .onChange(of: mediaVM.videoSwayEnabled) {
             updateVideoMotion()
+        }
+        .onChange(of: mediaVM.videoFollowHandEnabled) {
+            updateHandFollowState()
+        }
+        .onChange(of: mediaVM.slideshowFollowHandEnabled) {
+            updateHandFollowState()
         }
     }
 
@@ -504,6 +517,8 @@ struct ImmersiveView: View {
         var baseX = videoSwayBaseX
 
         videoMotionTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
+            // 手の甲追従中は位置の主導権を hand-follow タイマーに譲る
+            guard !vm.videoFollowHandEnabled else { return }
             let elapsed = Float(Date().timeIntervalSince(startTime))
             if vm.videoBobEnabled {
                 let offsetY = sin(elapsed * vm.videoBobSpeed * 2 * .pi) * vm.videoBobAmplitude
@@ -516,6 +531,51 @@ struct ImmersiveView: View {
             if vm.videoSwayEnabled {
                 let offsetX = sin(elapsed * vm.videoSwaySpeed * 2 * .pi) * vm.videoSwayAmplitude
                 rootEntity.position.x = baseX + offsetX
+            }
+        }
+    }
+
+    // MARK: - Hand Follow
+
+    /// 手の甲追従の ON/OFF を反映する。どちらかのパネルが追従中なら
+    /// ハンドトラッキングセッションと 60Hz の追従タイマーを起動し、
+    /// 両方 OFF ならすべて停止する。
+    private func updateHandFollowState() {
+        handFollowTimer?.invalidate()
+        handFollowTimer = nil
+
+        let anyFollow = mediaVM.videoFollowHandEnabled || mediaVM.slideshowFollowHandEnabled
+        guard anyFollow else {
+            handTracking.stop()
+            return
+        }
+
+        handTracking.startIfNeeded()
+
+        // Capture references to avoid retaining the entire view (same pattern as updateVideoMotion)
+        let tracker = handTracking
+        let vm = mediaVM
+        let videoRoot = videoRootEntity
+        let slideshowRoot = slideshowRootEntity
+
+        handFollowTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
+            let lerpFactor: Float = 0.18  // 補間係数: 大きいほど機敏、小さいほど滑らか
+            // 水平オフセットの「右」は頭の向き基準。デバイスアンカー未取得時はワールド X 軸。
+            let rightVec = tracker.headRightVector() ?? SIMD3<Float>(1, 0, 0)
+
+            if vm.videoFollowHandEnabled,
+               let hand = tracker.position(for: vm.videoFollowHand) {
+                let target = hand
+                    + SIMD3<Float>(0, vm.videoFollowHandHeight, 0)
+                    + rightVec * vm.videoFollowHandLateral
+                videoRoot.position = mix(videoRoot.position, target, t: lerpFactor)
+            }
+            if vm.slideshowFollowHandEnabled,
+               let hand = tracker.position(for: vm.slideshowFollowHand) {
+                let target = hand
+                    + SIMD3<Float>(0, vm.slideshowFollowHandHeight, 0)
+                    + rightVec * vm.slideshowFollowHandLateral
+                slideshowRoot.position = mix(slideshowRoot.position, target, t: lerpFactor)
             }
         }
     }

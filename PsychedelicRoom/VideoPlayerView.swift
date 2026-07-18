@@ -125,6 +125,11 @@ class MediaPanelViewModel {
     var videoSwayEnabled: Bool = false
     var videoSwayAmplitude: Float = 0.3   // left/right meters (0.05...1.0)
     var videoSwaySpeed: Float = 0.2       // cycles per second (0.02...0.5)
+    // Hand follow (video panel)
+    var videoFollowHandEnabled: Bool = false
+    var videoFollowHand: FollowHand = .left
+    var videoFollowHandHeight: Float = 0.3   // meters above back of hand (0.0...1.0)
+    var videoFollowHandLateral: Float = 0.0  // meters to the right (+) / left (-) of hand, head-relative (-1.0...1.0)
     var videoVersion: Int = 0
 
     var videoCurrentTime: Double = 0
@@ -142,6 +147,8 @@ class MediaPanelViewModel {
     var videoServerSearchError: String? = nil
     var videoServerTotalCount: Int = 0
     var videoServerLastTags: String = ""
+    /// 検索が最低 1 回でも実行されたかどうか。件数表示の可否判定に使う。
+    var videoServerSearchDone: Bool = false
     var videoSortOrder: ServerSortOrder = .filename
     var videoDatePreset: DateRangePreset = .all
     private var videoServerSearchTask: Task<Void, Never>?
@@ -192,6 +199,11 @@ class MediaPanelViewModel {
     var slideshowRotationV: Float = 0
     /// パネル湾曲量。0 = フラット、正値 = こちら向きに弧 (concave)、負値 = 奥向きに弧 (convex)。範囲は -1.0...1.0。
     var slideshowCurveAmount: Float = 0
+    // Hand follow (slideshow panel)
+    var slideshowFollowHandEnabled: Bool = false
+    var slideshowFollowHand: FollowHand = .left
+    var slideshowFollowHandHeight: Float = 0.3   // meters above back of hand (0.0...1.0)
+    var slideshowFollowHandLateral: Float = 0.0  // meters to the right (+) / left (-) of hand, head-relative (-1.0...1.0)
     var slideshowTexture: TextureResource?
     var slideshowRightTexture: TextureResource?
     var slideshowIsStereo: Bool = false
@@ -223,6 +235,8 @@ class MediaPanelViewModel {
     var slideshowServerSearchError: String? = nil
     var slideshowServerTotalCount: Int = 0
     var slideshowServerLastTags: String = ""
+    /// 検索が最低 1 回でも実行されたかどうか。件数表示の可否判定に使う。
+    var slideshowServerSearchDone: Bool = false
     var slideshowSortOrder: ServerSortOrder = .filename
     var slideshowDatePreset: DateRangePreset = .all
 
@@ -465,6 +479,7 @@ class MediaPanelViewModel {
                 self.videoPlaylistIndex = 0
                 self.videoServerTotalCount = assets.count
                 self.videoServerSearchInProgress = false
+                self.videoServerSearchDone = true
                 if !assets.isEmpty {
                     self.loadCurrentPlaylistVideo()
                 }
@@ -684,6 +699,7 @@ class MediaPanelViewModel {
                 self.slideshowCurrentIndex = 0
                 self.slideshowServerTotalCount = images.count
                 self.slideshowServerSearchInProgress = false
+                self.slideshowServerSearchDone = true
                 if !images.isEmpty {
                     self.loadCurrentSlideshowImage()
                 }

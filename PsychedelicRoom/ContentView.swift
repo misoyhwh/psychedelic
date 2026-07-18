@@ -718,6 +718,69 @@ struct ContentView: View {
                         }
                     }
 
+                    handFollowControls(
+                        enabled: Binding(
+                            get: { mediaVM.videoFollowHandEnabled },
+                            set: { mediaVM.videoFollowHandEnabled = $0 }
+                        ),
+                        hand: Binding(
+                            get: { mediaVM.videoFollowHand },
+                            set: { mediaVM.videoFollowHand = $0 }
+                        ),
+                        height: Binding(
+                            get: { mediaVM.videoFollowHandHeight },
+                            set: { mediaVM.videoFollowHandHeight = $0 }
+                        ),
+                        lateral: Binding(
+                            get: { mediaVM.videoFollowHandLateral },
+                            set: { mediaVM.videoFollowHandLateral = $0 }
+                        )
+                    )
+
+                }
+            }
+        }
+    }
+
+    // MARK: - Hand Follow Controls (shared by video & slideshow)
+
+    /// 手の甲追従の ON/OFF + 左右の手 + 高さ/水平オフセットの共通 UI。
+    @ViewBuilder
+    private func handFollowControls(
+        enabled: Binding<Bool>,
+        hand: Binding<FollowHand>,
+        height: Binding<Float>,
+        lateral: Binding<Float>
+    ) -> some View {
+        Toggle("手の甲に追従", isOn: enabled)
+            .toggleStyle(.switch)
+
+        if enabled.wrappedValue {
+            Text("パネルが手の甲の位置についてきます (実機のみ)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Picker("追従する手", selection: hand) {
+                ForEach(FollowHand.allCases) { h in
+                    Text(h.displayName).tag(h)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            VStack(alignment: .leading) {
+                Text("高さオフセット: \(String(format: "%.2f", height.wrappedValue))m")
+                Slider(value: height, in: 0.0...1.0, step: 0.05)
+            }
+
+            VStack(alignment: .leading) {
+                Text("水平オフセット: \(String(format: "%+.2f", lateral.wrappedValue))m")
+                Slider(value: lateral, in: -1.0...1.0, step: 0.05)
+                HStack {
+                    Text("← 左").font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("中央").font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("右 →").font(.caption2).foregroundStyle(.secondary)
                 }
             }
         }
@@ -891,6 +954,25 @@ struct ContentView: View {
                         }
                     }
 
+                    handFollowControls(
+                        enabled: Binding(
+                            get: { mediaVM.slideshowFollowHandEnabled },
+                            set: { mediaVM.slideshowFollowHandEnabled = $0 }
+                        ),
+                        hand: Binding(
+                            get: { mediaVM.slideshowFollowHand },
+                            set: { mediaVM.slideshowFollowHand = $0 }
+                        ),
+                        height: Binding(
+                            get: { mediaVM.slideshowFollowHandHeight },
+                            set: { mediaVM.slideshowFollowHandHeight = $0 }
+                        ),
+                        lateral: Binding(
+                            get: { mediaVM.slideshowFollowHandLateral },
+                            set: { mediaVM.slideshowFollowHandLateral = $0 }
+                        )
+                    )
+
                     // Chroma key (背景透過)
                     Divider()
                     Toggle("背景透過 (クロマキー)", isOn: Binding(
@@ -1004,6 +1086,10 @@ struct ContentView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
 
+            Text("空欄にすると全件検索 (最大 500 本)")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+
             HStack(spacing: 4) {
                 Button {
                     openWindow(id: "VideoTagPickerWindow")
@@ -1058,8 +1144,9 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
                     .lineLimit(3)
-            } else if !mediaVM.videoServerLastTags.isEmpty {
-                Text("検索結果: \(mediaVM.videoServerTotalCount) 本 (\(mediaVM.videoServerLastTags))")
+            } else if mediaVM.videoServerSearchDone {
+                let tagsLabel = mediaVM.videoServerLastTags.isEmpty ? "タグなし" : mediaVM.videoServerLastTags
+                Text("検索結果: \(mediaVM.videoServerTotalCount) 本 (\(tagsLabel))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -1114,6 +1201,10 @@ struct ContentView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
 
+            Text("空欄にすると全件検索 (最大 2000 件)")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+
             Button {
                 openWindow(id: "ImageTagPickerWindow")
             } label: {
@@ -1165,8 +1256,9 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
                     .lineLimit(3)
-            } else if !mediaVM.slideshowServerLastTags.isEmpty {
-                Text("検索結果: \(mediaVM.slideshowServerTotalCount) 件 (\(mediaVM.slideshowServerLastTags))")
+            } else if mediaVM.slideshowServerSearchDone {
+                let tagsLabel = mediaVM.slideshowServerLastTags.isEmpty ? "タグなし" : mediaVM.slideshowServerLastTags
+                Text("検索結果: \(mediaVM.slideshowServerTotalCount) 件 (\(tagsLabel))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
