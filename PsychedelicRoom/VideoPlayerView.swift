@@ -130,7 +130,8 @@ class MediaPanelViewModel {
     var videoFaceDistance: Float = 2.0   // meters in front of head (0.5...4.0)
     var videoFaceHeight: Float = 0.0     // vertical offset meters (-1.0...1.0)
     var videoFaceLateral: Float = 0.0    // head-relative right(+)/left(-) meters (-1.0...1.0)
-    var videoFaceInterval: Float = 1.0   // detection interval seconds (0.5...3.0)
+    var videoFaceInterval: Float = 1.0   // detection interval seconds (0.1...3.0)
+    var videoFaceDetectionMode: CenterDetectionMode = .face
     /// 最新の検出結果 (Vision 正規化座標、原点左下)。未検出は nil = 画像中心扱い。
     var videoFaceCenter: SIMD2<Float>? = nil
     private var videoFaceDetectTimer: Timer?
@@ -218,6 +219,7 @@ class MediaPanelViewModel {
     // Face centering (slideshow panel) — 顔検出して毎スライド頭の正面に配置
     var slideshowFaceCenterEnabled: Bool = false
     var slideshowFaceDistance: Float = 2.0   // meters in front of head (0.5...4.0)
+    var slideshowFaceDetectionMode: CenterDetectionMode = .face
     var slideshowFaceHeight: Float = 0.0     // vertical offset meters (-1.0...1.0)
     var slideshowFaceLateral: Float = 0.0    // head-relative right(+)/left(-) meters (-1.0...1.0)
     /// 検出した顔中心 (Vision 正規化座標、原点左下)。未検出/無効時は nil = 画像中心扱い。
@@ -506,8 +508,9 @@ class MediaPanelViewModel {
         let time = player.currentTime()
         guard let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else { return }
         videoFaceDetectionInFlight = true
+        let mode = videoFaceDetectionMode
         Task { [weak self] in
-            let center = await SlideshowEngine.detectFaceCenter(inPixelBuffer: buffer)
+            let center = await SlideshowEngine.detectCenter(inPixelBuffer: buffer, mode: mode)
             self?.videoFaceCenter = center
             self?.videoFaceDetectionInFlight = false
         }
@@ -1020,7 +1023,10 @@ class MediaPanelViewModel {
                 // 顔中心配置: 表示を止めずに後追いで検出 → 配置トリガー
                 if slideshowFaceCenterEnabled {
                     if let leftCG = textures.leftDisplayImage {
-                        let center = await SlideshowEngine.detectFaceCenter(in: leftCG)
+                        let center = await SlideshowEngine.detectCenter(
+                            in: leftCG,
+                            mode: slideshowFaceDetectionMode
+                        )
                         guard !Task.isCancelled else { return }
                         slideshowFaceCenter = center
                     } else {

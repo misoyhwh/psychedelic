@@ -756,9 +756,23 @@ struct ContentView: View {
                     .toggleStyle(.switch)
 
                     if mediaVM.videoFaceCenterEnabled {
-                        Text("再生中の顔を定期検出し、顔が頭の正面に来るようパネルがゆっくり追従します (実写向け・実機のみ)")
+                        Text("再生中の顔 (または注目領域) を定期検出し、頭の正面に来るようパネルがゆっくり追従します (実機のみ)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+
+                        Picker("検出方法", selection: Binding(
+                            get: { mediaVM.videoFaceDetectionMode },
+                            set: { mediaVM.videoFaceDetectionMode = $0 }
+                        )) {
+                            ForEach(CenterDetectionMode.allCases) { m in
+                                Text(m.displayName).tag(m)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text("顔検出 = 実写 / 注目度 = 汎用 / アニメ顔 = イラスト向け")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
 
                         VStack(alignment: .leading) {
                             Text("距離: \(String(format: "%.1f", mediaVM.videoFaceDistance))m")
@@ -785,11 +799,11 @@ struct ContentView: View {
                         }
 
                         VStack(alignment: .leading) {
-                            Text("検出間隔: \(String(format: "%.2f", mediaVM.videoFaceInterval))秒")
+                            Text("検出間隔: \(String(format: "%.1f", mediaVM.videoFaceInterval))秒")
                             Slider(value: Binding(
                                 get: { mediaVM.videoFaceInterval },
                                 set: { mediaVM.videoFaceInterval = $0 }
-                            ), in: 0.5...3.0, step: 0.25)
+                            ), in: 0.1...3.0, step: 0.1)
                         }
                     }
 
@@ -1061,9 +1075,23 @@ struct ContentView: View {
                     .toggleStyle(.switch)
 
                     if mediaVM.slideshowFaceCenterEnabled {
-                        Text("画像の顔を検出し、毎スライド頭の正面に顔が来るよう配置します (実写向け・実機のみ)")
+                        Text("画像の顔 (または注目領域) を検出し、毎スライド頭の正面に来るよう配置します (実機のみ)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+
+                        Picker("検出方法", selection: Binding(
+                            get: { mediaVM.slideshowFaceDetectionMode },
+                            set: { mediaVM.slideshowFaceDetectionMode = $0 }
+                        )) {
+                            ForEach(CenterDetectionMode.allCases) { m in
+                                Text(m.displayName).tag(m)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text("顔検出 = 実写 / 注目度 = 汎用 / アニメ顔 = イラスト向け")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
 
                         VStack(alignment: .leading) {
                             Text("距離: \(String(format: "%.1f", mediaVM.slideshowFaceDistance))m")

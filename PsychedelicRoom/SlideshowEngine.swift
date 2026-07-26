@@ -3,8 +3,26 @@ import RealityKit
 import ImageIO
 import CoreGraphics
 import CoreVideo
+import CoreML
 import Vision
 import CoreImage
+
+/// 顔中心配置の検出方法。
+enum CenterDetectionMode: String, CaseIterable, Identifiable, Sendable {
+    case face
+    case saliency
+    case animeFace
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .face: return "顔検出"
+        case .saliency: return "注目度"
+        case .animeFace: return "アニメ顔"
+        }
+    }
+}
 
 struct SlideshowImage {
     let url: URL
@@ -144,57 +162,74 @@ class SlideshowEngine {
         return CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary)
     }
 
-    /// Vision の顔検出で最大の顔の中心を正規化座標で返す (原点は左下、0...1)。
+    /// 画像/動画フレームの「中心検出」で顔の中心を正規化座標 (原点左下、0...1) で返す。
+    /// - face: Vision の顔検出。実写向け — イラストの顔は検出できないことが多い。
+    /// - saliency: 注目度サリエンシー。人が注目しやすい領域 (イラストでも顔付近に反応しやすい)。
     /// 検出できなければ nil (呼び出し側は画像中心として扱う)。
-    /// 実写向け — イラストの顔は検出できないことが多い。
-    static func detectFaceCenter(in image: CGImage) async -> SIMD2<Float>? {
+    static func detectCenter(in image: CGImage, mode: CenterDetectionMode) async -> SIMD2<Float>? {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                let request = VNDetectFaceRectanglesRequest()
                 let handler = VNImageRequestHandler(cgImage: image, options: [:])
-                do {
-                    try handler.perform([request])
-                } catch {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                guard let faces = request.results, !faces.isEmpty else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                let largest = faces.max {
-                    $0.boundingBox.width * $0.boundingBox.height
-                        < $1.boundingBox.width * $1.boundingBox.height
-                }!
-                let bb = largest.boundingBox
-                continuation.resume(returning: SIMD2<Float>(Float(bb.midX), Float(bb.midY)))
+                continuation.resume(returning: detectedCenter(mode: mode, handler: handler))
             }
         }
     }
 
-    /// 動画フレーム (CVPixelBuffer) 版の顔中心検出。座標系は CGImage 版と同じ (原点左下、0...1)。
-    static func detectFaceCenter(inPixelBuffer buffer: CVPixelBuffer) async -> SIMD2<Float>? {
+    /// 動画フレーム (CVPixelBuffer) 版。座標系は CGImage 版と同じ。
+    static func detectCenter(inPixelBuffer buffer: CVPixelBuffer, mode: CenterDetectionMode) async -> SIMD2<Float>? {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                let request = VNDetectFaceRectanglesRequest()
                 let handler = VNImageRequestHandler(cvPixelBuffer: buffer, options: [:])
-                do {
-                    try handler.perform([request])
-                } catch {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                guard let faces = request.results, !faces.isEmpty else {
-                    continuation.resume(returning: nil)
-                    return
-                }
-                let largest = faces.max {
-                    $0.boundingBox.width * $0.boundingBox.height
-                        < $1.boundingBox.width * $1.boundingBox.height
-                }!
-                let bb = largest.boundingBox
-                continuation.resume(returning: SIMD2<Float>(Float(bb.midX), Float(bb.midY)))
+                continuation.resume(returning: detectedCenter(mode: mode, handler: handler))
             }
+        }
+    }
+
+    /// アニメ顔検出用の Core ML モデル (deepghs/anime_face_detection v1.4_s を Core ML 変換したもの)。
+    /// 初回アクセス時に一度だけロードされる。失敗時は nil (呼び出し側は未検出扱い)。
+    nonisolated(unsafe) private static let animeFaceModel: VNCoreMLModel? = {
+        guard let mlModel = try? AnimeFaceDetector(configuration: MLModelConfiguration()).model,
+              let vnModel = try? VNCoreMLModel(for: mlModel) else {
+            print("Failed to load AnimeFaceDetector Core ML model")
+            return nil
+        }
+        return vnModel
+    }()
+
+    nonisolated private static func detectedCenter(mode: CenterDetectionMode, handler: VNImageRequestHandler) -> SIMD2<Float>? {
+        switch mode {
+        case .face:
+            let request = VNDetectFaceRectanglesRequest()
+            guard (try? handler.perform([request])) != nil,
+                  let faces = request.results, !faces.isEmpty else { return nil }
+            let largest = faces.max {
+                $0.boundingBox.width * $0.boundingBox.height
+                    < $1.boundingBox.width * $1.boundingBox.height
+            }!
+            return SIMD2<Float>(Float(largest.boundingBox.midX), Float(largest.boundingBox.midY))
+        case .saliency:
+            let request = VNGenerateAttentionBasedSaliencyImageRequest()
+            guard (try? handler.perform([request])) != nil,
+                  let observation = request.results?.first,
+                  let objects = observation.salientObjects, !objects.isEmpty else { return nil }
+            let largest = objects.max {
+                $0.boundingBox.width * $0.boundingBox.height
+                    < $1.boundingBox.width * $1.boundingBox.height
+            }!
+            return SIMD2<Float>(Float(largest.boundingBox.midX), Float(largest.boundingBox.midY))
+        case .animeFace:
+            guard let vnModel = animeFaceModel else { return nil }
+            let request = VNCoreMLRequest(model: vnModel)
+            // YOLO (ultralytics) エクスポートの前処理に合わせる
+            request.imageCropAndScaleOption = .scaleFill
+            guard (try? handler.perform([request])) != nil,
+                  let results = request.results as? [VNRecognizedObjectObservation],
+                  !results.isEmpty else { return nil }
+            let largest = results.max {
+                $0.boundingBox.width * $0.boundingBox.height
+                    < $1.boundingBox.width * $1.boundingBox.height
+            }!
+            return SIMD2<Float>(Float(largest.boundingBox.midX), Float(largest.boundingBox.midY))
         }
     }
 

@@ -87,6 +87,7 @@ struct ImmersiveView: View {
             let _ = mediaVM.slideshowFollowHandEnabled
             let _ = mediaVM.slideshowFaceCenterEnabled
             let _ = mediaVM.slideshowFacePlacementTick
+            let _ = mediaVM.slideshowFaceDetectionMode
             let _ = mediaVM.videoFaceCenterEnabled
             let _ = mediaVM.videoBackgroundRemovalEnabled
             let _ = mediaVM.videoChromaThreshold
@@ -240,6 +241,12 @@ struct ImmersiveView: View {
         }
         .onChange(of: mediaVM.slideshowFacePlacementTick) {
             placeSlideshowByFace()
+        }
+        .onChange(of: mediaVM.slideshowFaceDetectionMode) {
+            if mediaVM.slideshowFaceCenterEnabled {
+                // 検出方法の変更を現在の画像にも即反映 (再ロード → 再検出 → 再配置)
+                mediaVM.loadCurrentSlideshowImage()
+            }
         }
         .onChange(of: mediaVM.slideshowFaceDistance) {
             placeSlideshowByFace()
