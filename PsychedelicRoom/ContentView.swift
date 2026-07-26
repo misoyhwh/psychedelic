@@ -438,6 +438,13 @@ struct ContentView: View {
                         Text("\(mediaVM.videoPlaylistIndex + 1) / \(mediaVM.videoPlaylist.count) 本")
                             .font(.caption)
 
+                        if mediaVM.currentVideoHash != nil {
+                            favoriteRow(
+                                current: mediaVM.videoCurrentFavorite,
+                                busy: mediaVM.videoFavoriteBusy
+                            ) { mediaVM.setVideoFavorite($0) }
+                        }
+
                         HStack(spacing: 8) {
                             Button { mediaVM.videoPlaylistJump(by: -10) } label: {
                                 Text("-10").font(.caption2)
@@ -734,8 +741,57 @@ struct ContentView: View {
                         lateral: Binding(
                             get: { mediaVM.videoFollowHandLateral },
                             set: { mediaVM.videoFollowHandLateral = $0 }
+                        ),
+                        depth: Binding(
+                            get: { mediaVM.videoFollowHandDepth },
+                            set: { mediaVM.videoFollowHandDepth = $0 }
                         )
                     )
+
+                    // Face centering (連続顔追跡)
+                    Toggle("顔を正面に配置 (連続追跡)", isOn: Binding(
+                        get: { mediaVM.videoFaceCenterEnabled },
+                        set: { mediaVM.videoFaceCenterEnabled = $0 }
+                    ))
+                    .toggleStyle(.switch)
+
+                    if mediaVM.videoFaceCenterEnabled {
+                        Text("再生中の顔を定期検出し、顔が頭の正面に来るようパネルがゆっくり追従します (実写向け・実機のみ)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        VStack(alignment: .leading) {
+                            Text("距離: \(String(format: "%.1f", mediaVM.videoFaceDistance))m")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoFaceDistance },
+                                set: { mediaVM.videoFaceDistance = $0 }
+                            ), in: 0.5...4.0, step: 0.1)
+                        }
+
+                        VStack(alignment: .leading) {
+                            Text("高さオフセット: \(String(format: "%+.2f", mediaVM.videoFaceHeight))m")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoFaceHeight },
+                                set: { mediaVM.videoFaceHeight = $0 }
+                            ), in: -1.0...1.0, step: 0.05)
+                        }
+
+                        VStack(alignment: .leading) {
+                            Text("水平オフセット: \(String(format: "%+.2f", mediaVM.videoFaceLateral))m")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoFaceLateral },
+                                set: { mediaVM.videoFaceLateral = $0 }
+                            ), in: -1.0...1.0, step: 0.05)
+                        }
+
+                        VStack(alignment: .leading) {
+                            Text("検出間隔: \(String(format: "%.2f", mediaVM.videoFaceInterval))秒")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoFaceInterval },
+                                set: { mediaVM.videoFaceInterval = $0 }
+                            ), in: 0.5...3.0, step: 0.25)
+                        }
+                    }
 
                 }
             }
@@ -744,13 +800,14 @@ struct ContentView: View {
 
     // MARK: - Hand Follow Controls (shared by video & slideshow)
 
-    /// 手の甲追従の ON/OFF + 左右の手 + 高さ/水平オフセットの共通 UI。
+    /// 手の甲追従の ON/OFF + 左右の手 + 高さ/水平/奥行きオフセットの共通 UI。
     @ViewBuilder
     private func handFollowControls(
         enabled: Binding<Bool>,
         hand: Binding<FollowHand>,
         height: Binding<Float>,
-        lateral: Binding<Float>
+        lateral: Binding<Float>,
+        depth: Binding<Float>
     ) -> some View {
         Toggle("手の甲に追従", isOn: enabled)
             .toggleStyle(.switch)
@@ -781,6 +838,18 @@ struct ContentView: View {
                     Text("中央").font(.caption2).foregroundStyle(.secondary)
                     Spacer()
                     Text("右 →").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+
+            VStack(alignment: .leading) {
+                Text("奥行きオフセット: \(String(format: "%+.2f", depth.wrappedValue))m")
+                Slider(value: depth, in: -1.0...1.0, step: 0.05)
+                HStack {
+                    Text("← 手前").font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("中央").font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("奥 →").font(.caption2).foregroundStyle(.secondary)
                 }
             }
         }
@@ -857,6 +926,13 @@ struct ContentView: View {
                         Label("立体視 (Stereo)", systemImage: "eye.trianglebadge.exclamationmark")
                             .font(.caption)
                             .foregroundStyle(.blue)
+                    }
+
+                    if mediaVM.slideshowSourceMode == .serverSearch, mediaVM.currentSlideshowHash != nil {
+                        favoriteRow(
+                            current: mediaVM.slideshowCurrentFavorite,
+                            busy: mediaVM.slideshowFavoriteBusy
+                        ) { mediaVM.setSlideshowFavorite($0) }
                     }
 
                     // Navigation controls
@@ -970,8 +1046,54 @@ struct ContentView: View {
                         lateral: Binding(
                             get: { mediaVM.slideshowFollowHandLateral },
                             set: { mediaVM.slideshowFollowHandLateral = $0 }
+                        ),
+                        depth: Binding(
+                            get: { mediaVM.slideshowFollowHandDepth },
+                            set: { mediaVM.slideshowFollowHandDepth = $0 }
                         )
                     )
+
+                    // Face centering (顔を正面に配置)
+                    Toggle("顔を正面に配置", isOn: Binding(
+                        get: { mediaVM.slideshowFaceCenterEnabled },
+                        set: { mediaVM.slideshowFaceCenterEnabled = $0 }
+                    ))
+                    .toggleStyle(.switch)
+
+                    if mediaVM.slideshowFaceCenterEnabled {
+                        Text("画像の顔を検出し、毎スライド頭の正面に顔が来るよう配置します (実写向け・実機のみ)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        VStack(alignment: .leading) {
+                            Text("距離: \(String(format: "%.1f", mediaVM.slideshowFaceDistance))m")
+                            Slider(value: Binding(
+                                get: { mediaVM.slideshowFaceDistance },
+                                set: { mediaVM.slideshowFaceDistance = $0 }
+                            ), in: 0.5...4.0, step: 0.1)
+                        }
+
+                        VStack(alignment: .leading) {
+                            Text("高さオフセット: \(String(format: "%+.2f", mediaVM.slideshowFaceHeight))m")
+                            Slider(value: Binding(
+                                get: { mediaVM.slideshowFaceHeight },
+                                set: { mediaVM.slideshowFaceHeight = $0 }
+                            ), in: -1.0...1.0, step: 0.05)
+                        }
+
+                        VStack(alignment: .leading) {
+                            Text("水平オフセット: \(String(format: "%+.2f", mediaVM.slideshowFaceLateral))m")
+                            Slider(value: Binding(
+                                get: { mediaVM.slideshowFaceLateral },
+                                set: { mediaVM.slideshowFaceLateral = $0 }
+                            ), in: -1.0...1.0, step: 0.05)
+                            HStack {
+                                Text("← 左").font(.caption2).foregroundStyle(.secondary)
+                                Spacer()
+                                Text("右 →").font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
 
                     // Chroma key (背景透過)
                     Divider()
@@ -1121,6 +1243,11 @@ struct ContentView: View {
                 )
             )
 
+            favoriteFilterPicker(selection: Binding(
+                get: { appModel.illustServerVideoFavoriteMin },
+                set: { appModel.illustServerVideoFavoriteMin = $0 }
+            ))
+
             Button {
                 triggerVideoServerSearch()
             } label: {
@@ -1182,7 +1309,8 @@ struct ContentView: View {
             tags: tags,
             ratings: ratings,
             after: preset.afterEpoch(),
-            sortOrder: sortOrder
+            sortOrder: sortOrder,
+            favorite: appModel.illustServerVideoFavoriteMin
         )
     }
 
@@ -1232,6 +1360,11 @@ struct ContentView: View {
                     set: { appModel.illustServerImageDatePreset = $0 }
                 )
             )
+
+            favoriteFilterPicker(selection: Binding(
+                get: { appModel.illustServerImageFavoriteMin },
+                set: { appModel.illustServerImageFavoriteMin = $0 }
+            ))
 
             Button {
                 triggerServerSearch()
@@ -1294,7 +1427,8 @@ struct ContentView: View {
             tags: tags,
             ratings: ratings,
             after: preset.afterEpoch(),
-            sortOrder: sortOrder
+            sortOrder: sortOrder,
+            favorite: appModel.illustServerImageFavoriteMin
         )
     }
 
@@ -1330,6 +1464,66 @@ struct ContentView: View {
         let idx = mediaVM.videoPlaylistIndex
         guard idx >= 0, idx < mediaVM.videoPlaylist.count else { return [] }
         return mediaVM.videoPlaylist[idx].tags ?? []
+    }
+
+    // MARK: - Favorite Controls (shared by slideshow & video)
+
+    /// 現在表示中アイテムのお気に入り (1...10 のラベル) を設定する行。
+    /// 選択中の番号だけが黄色でハイライトされ、もう一度押すと解除。
+    @ViewBuilder
+    private func favoriteRow(current: Int?, busy: Bool, set: @escaping (Int?) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Text(current != nil ? "お気に入り: \(current!)" : "お気に入り: なし")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if busy {
+                    ProgressView().controlSize(.mini)
+                }
+                Spacer()
+                Button {
+                    set(nil)
+                } label: {
+                    Image(systemName: "xmark.circle").imageScale(.small)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.mini)
+                .disabled(current == nil || busy)
+            }
+            HStack(spacing: 2) {
+                ForEach(1...10, id: \.self) { n in
+                    Button {
+                        set(n == current ? nil : n)
+                    } label: {
+                        Text("\(n)")
+                            .font(.caption2)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.mini)
+                    .tint(n == current ? .yellow : .secondary)
+                    .disabled(busy)
+                }
+            }
+        }
+    }
+
+    /// 検索用のお気に入りフィルター (0 = なし、N = その番号のみ表示)。
+    @ViewBuilder
+    private func favoriteFilterPicker(selection: Binding<Int>) -> some View {
+        HStack {
+            Text("お気に入り")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("お気に入りフィルター", selection: selection) {
+                Text("フィルタなし").tag(0)
+                ForEach(1...10, id: \.self) { n in
+                    Text("\(n) のみ").tag(n)
+                }
+            }
+            .pickerStyle(.menu)
+            Spacer()
+        }
     }
 
     // MARK: - Sort / Date Filter Controls (shared by slideshow & video)

@@ -2,6 +2,7 @@ import Foundation
 import RealityKit
 import ImageIO
 import CoreGraphics
+import CoreVideo
 import Vision
 import CoreImage
 
@@ -11,6 +12,8 @@ struct SlideshowImage {
     let displayName: String?
     /// サーバ検索由来の場合、そのアセットのタグ。ローカル/未対応サーバでは nil。
     var tags: [String]? = nil
+    /// illust-server 上の asset hash (リモートのみ)。お気に入り設定に使う。ローカルは nil。
+    var hash: String? = nil
     // stereo detection is deferred to load time
 }
 
@@ -139,6 +142,60 @@ class SlideshowEngine {
             kCGImageSourceShouldCacheImmediately: true,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, index, options as CFDictionary)
+    }
+
+    /// Vision の顔検出で最大の顔の中心を正規化座標で返す (原点は左下、0...1)。
+    /// 検出できなければ nil (呼び出し側は画像中心として扱う)。
+    /// 実写向け — イラストの顔は検出できないことが多い。
+    static func detectFaceCenter(in image: CGImage) async -> SIMD2<Float>? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let request = VNDetectFaceRectanglesRequest()
+                let handler = VNImageRequestHandler(cgImage: image, options: [:])
+                do {
+                    try handler.perform([request])
+                } catch {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                guard let faces = request.results, !faces.isEmpty else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let largest = faces.max {
+                    $0.boundingBox.width * $0.boundingBox.height
+                        < $1.boundingBox.width * $1.boundingBox.height
+                }!
+                let bb = largest.boundingBox
+                continuation.resume(returning: SIMD2<Float>(Float(bb.midX), Float(bb.midY)))
+            }
+        }
+    }
+
+    /// 動画フレーム (CVPixelBuffer) 版の顔中心検出。座標系は CGImage 版と同じ (原点左下、0...1)。
+    static func detectFaceCenter(inPixelBuffer buffer: CVPixelBuffer) async -> SIMD2<Float>? {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let request = VNDetectFaceRectanglesRequest()
+                let handler = VNImageRequestHandler(cvPixelBuffer: buffer, options: [:])
+                do {
+                    try handler.perform([request])
+                } catch {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                guard let faces = request.results, !faces.isEmpty else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let largest = faces.max {
+                    $0.boundingBox.width * $0.boundingBox.height
+                        < $1.boundingBox.width * $1.boundingBox.height
+                }!
+                let bb = largest.boundingBox
+                continuation.resume(returning: SIMD2<Float>(Float(bb.midX), Float(bb.midY)))
+            }
+        }
     }
 
     private static func makeColorSamplingThumbnail(from source: CGImageSource) -> CGImage? {

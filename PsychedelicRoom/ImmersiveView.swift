@@ -22,6 +22,10 @@ struct ImmersiveView: View {
     @State private var videoMotionTimer: Timer?
     @State private var handTracking = HandTrackingManager()
     @State private var handFollowTimer: Timer?
+    /// 顔中心配置モードで頭に向けたヨー角 (rad)。nil = 顔配置による向き補正なし。
+    @State private var slideshowFaceYaw: Float? = nil
+    /// 動画の連続顔追跡タイマー (60Hz で lerp 追従)。
+    @State private var videoFaceFollowTimer: Timer?
     @State private var videoMotionStartTime: Date?
 
     // Slideshow panel entities
@@ -48,7 +52,26 @@ struct ImmersiveView: View {
             content.add(slideshowRootEntity)
 
             await sceneReconstructor.start()
-        } update: { content in
+        } update: { _ in
+            runSceneUpdate()
+        }
+        .onDisappear {
+            videoMotionTimer?.invalidate()
+            videoMotionTimer = nil
+            handFollowTimer?.invalidate()
+            handFollowTimer = nil
+            videoFaceFollowTimer?.invalidate()
+            videoFaceFollowTimer = nil
+            mediaVM.stopVideoFaceDetection()
+            handTracking.stop()
+            videoFramePump?.detach()
+        }
+    }
+
+    /// RealityView の update closure 本体。閉包内に直接書くと SwiftUI の
+    /// 型チェックが時間切れになるため関数に分離している。
+    /// (observation 登録は実行時のプロパティアクセスで行われるため、関数化しても機能は同じ)
+    private func runSceneUpdate() {
             // Read mediaVM properties to register SwiftUI observation
             // (ensures onChange handlers fire reliably)
             let _ = mediaVM.videoVersion
@@ -62,6 +85,9 @@ struct ImmersiveView: View {
             let _ = mediaVM.videoSwayEnabled
             let _ = mediaVM.videoFollowHandEnabled
             let _ = mediaVM.slideshowFollowHandEnabled
+            let _ = mediaVM.slideshowFaceCenterEnabled
+            let _ = mediaVM.slideshowFacePlacementTick
+            let _ = mediaVM.videoFaceCenterEnabled
             let _ = mediaVM.videoBackgroundRemovalEnabled
             let _ = mediaVM.videoChromaThreshold
             let _ = mediaVM.videoChromaSmoothness
@@ -146,15 +172,11 @@ struct ImmersiveView: View {
                 height: appModel.occlusionPanelHeight,
                 rotationDegrees: appModel.occlusionPanelRotation
             )
-        }
-        .onDisappear {
-            videoMotionTimer?.invalidate()
-            videoMotionTimer = nil
-            handFollowTimer?.invalidate()
-            handFollowTimer = nil
-            handTracking.stop()
-            videoFramePump?.detach()
-        }
+    }
+
+    /// sceneView + ジェスチャー + 動画系 onChange。
+    private var sceneWithVideoHandlers: some View {
+        sceneView
         .gesture(occlusionDragGesture)
         .gesture(panelDragGesture)
         .gesture(panelMagnifyGesture)
@@ -187,16 +209,51 @@ struct ImmersiveView: View {
         .onChange(of: mediaVM.videoSwayEnabled) {
             updateVideoMotion()
         }
+    }
+
+    /// 手の甲追従・顔配置系の onChange (型チェック時間対策でチェーンを分割)。
+    private var sceneWithFollowHandlers: some View {
+        sceneWithVideoHandlers
         .onChange(of: mediaVM.videoFollowHandEnabled) {
             updateHandFollowState()
         }
         .onChange(of: mediaVM.slideshowFollowHandEnabled) {
             updateHandFollowState()
         }
+        .onChange(of: mediaVM.videoFaceCenterEnabled) {
+            updateVideoFaceFollowState()
+        }
+        .onChange(of: mediaVM.videoFaceInterval) {
+            if mediaVM.videoFaceCenterEnabled {
+                mediaVM.startVideoFaceDetection()
+            }
+        }
+        .onChange(of: mediaVM.slideshowFaceCenterEnabled) {
+            updateTrackingSessions()
+            if mediaVM.slideshowFaceCenterEnabled {
+                // 現在表示中の画像にも即適用するため再ロード → 検出 → 配置
+                mediaVM.loadCurrentSlideshowImage()
+            } else {
+                slideshowFaceYaw = nil
+                updateSlideshowRotation()
+            }
+        }
+        .onChange(of: mediaVM.slideshowFacePlacementTick) {
+            placeSlideshowByFace()
+        }
+        .onChange(of: mediaVM.slideshowFaceDistance) {
+            placeSlideshowByFace()
+        }
+        .onChange(of: mediaVM.slideshowFaceHeight) {
+            placeSlideshowByFace()
+        }
+        .onChange(of: mediaVM.slideshowFaceLateral) {
+            placeSlideshowByFace()
+        }
     }
 
     var body: some View {
-        sceneView
+        sceneWithFollowHandlers
         // MARK: - Slideshow panel onChange handlers
         .onChange(of: mediaVM.slideshowTextureVersion) {
             recreateSlideshowEntity()
@@ -487,6 +544,8 @@ struct ImmersiveView: View {
     }
 
     private func updateVideoRotation() {
+        // 連続顔追跡中は 60Hz タイマーが facing 込みで orientation を管理する
+        guard !mediaVM.videoFaceCenterEnabled else { return }
         let yaw = simd_quatf(angle: mediaVM.videoRotationH * .pi / 180, axis: [0, 1, 0])
         let pitch = simd_quatf(angle: mediaVM.videoRotationV * .pi / 180, axis: [1, 0, 0])
         videoRootEntity.orientation = yaw * pitch
@@ -517,8 +576,8 @@ struct ImmersiveView: View {
         var baseX = videoSwayBaseX
 
         videoMotionTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
-            // 手の甲追従中は位置の主導権を hand-follow タイマーに譲る
-            guard !vm.videoFollowHandEnabled else { return }
+            // 手の甲追従・顔追跡中は位置の主導権をそちらのタイマーに譲る
+            guard !vm.videoFollowHandEnabled, !vm.videoFaceCenterEnabled else { return }
             let elapsed = Float(Date().timeIntervalSince(startTime))
             if vm.videoBobEnabled {
                 let offsetY = sin(elapsed * vm.videoBobSpeed * 2 * .pi) * vm.videoBobAmplitude
@@ -546,11 +605,11 @@ struct ImmersiveView: View {
 
         let anyFollow = mediaVM.videoFollowHandEnabled || mediaVM.slideshowFollowHandEnabled
         guard anyFollow else {
-            handTracking.stop()
+            updateTrackingSessions()
             return
         }
 
-        handTracking.startIfNeeded()
+        handTracking.startIfNeeded(hands: true)
 
         // Capture references to avoid retaining the entire view (same pattern as updateVideoMotion)
         let tracker = handTracking
@@ -560,14 +619,16 @@ struct ImmersiveView: View {
 
         handFollowTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
             let lerpFactor: Float = 0.18  // 補間係数: 大きいほど機敏、小さいほど滑らか
-            // 水平オフセットの「右」は頭の向き基準。デバイスアンカー未取得時はワールド X 軸。
+            // 水平/奥行きオフセットは頭の向き基準。デバイスアンカー未取得時はワールド軸にフォールバック。
             let rightVec = tracker.headRightVector() ?? SIMD3<Float>(1, 0, 0)
+            let forwardVec = tracker.headForwardVector() ?? SIMD3<Float>(0, 0, -1)
 
             if vm.videoFollowHandEnabled,
                let hand = tracker.position(for: vm.videoFollowHand) {
                 let target = hand
                     + SIMD3<Float>(0, vm.videoFollowHandHeight, 0)
                     + rightVec * vm.videoFollowHandLateral
+                    + forwardVec * vm.videoFollowHandDepth
                 videoRoot.position = mix(videoRoot.position, target, t: lerpFactor)
             }
             if vm.slideshowFollowHandEnabled,
@@ -575,9 +636,112 @@ struct ImmersiveView: View {
                 let target = hand
                     + SIMD3<Float>(0, vm.slideshowFollowHandHeight, 0)
                     + rightVec * vm.slideshowFollowHandLateral
+                    + forwardVec * vm.slideshowFollowHandDepth
                 slideshowRoot.position = mix(slideshowRoot.position, target, t: lerpFactor)
             }
         }
+    }
+
+    // MARK: - Tracking Session Management
+
+    /// 手の甲追従 / 顔中心配置の有効状態に応じて ARKit セッションを起動・停止する。
+    /// 手が必要なら hands つき、顔配置だけなら頭の姿勢のみ、どちらも不要なら停止。
+    private func updateTrackingSessions() {
+        let needHands = mediaVM.videoFollowHandEnabled || mediaVM.slideshowFollowHandEnabled
+        let needWorld = needHands
+            || mediaVM.slideshowFaceCenterEnabled
+            || mediaVM.videoFaceCenterEnabled
+        if needHands {
+            handTracking.startIfNeeded(hands: true)
+        } else if needWorld {
+            handTracking.startIfNeeded(hands: false)
+        } else {
+            handTracking.stop()
+        }
+    }
+
+    /// 動画の連続顔追跡の ON/OFF を反映する。
+    /// ON: 検出ループ (VM 側) + 60Hz の lerp 追従タイマーを起動。OFF: 停止して向きをスライダー基準に戻す。
+    private func updateVideoFaceFollowState() {
+        videoFaceFollowTimer?.invalidate()
+        videoFaceFollowTimer = nil
+
+        guard mediaVM.videoFaceCenterEnabled else {
+            mediaVM.stopVideoFaceDetection()
+            updateTrackingSessions()
+            updateVideoRotation()
+            return
+        }
+
+        updateTrackingSessions()
+        mediaVM.startVideoFaceDetection()
+
+        // Capture references to avoid retaining the entire view (same pattern as updateVideoMotion)
+        let tracker = handTracking
+        let vm = mediaVM
+        let root = videoRootEntity
+
+        videoFaceFollowTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
+            guard vm.videoFaceCenterEnabled,
+                  !vm.videoFollowHandEnabled,
+                  let headPos = tracker.headPosition() else { return }
+
+            let fwd = tracker.headForwardVector() ?? SIMD3<Float>(0, 0, -1)
+            let right = tracker.headRightVector() ?? SIMD3<Float>(1, 0, 0)
+            let anchor = headPos
+                + fwd * vm.videoFaceDistance
+                + SIMD3<Float>(0, vm.videoFaceHeight, 0)
+                + right * vm.videoFaceLateral
+
+            // ヨーだけ頭に向け、回転スライダーを相対適用。slerp で滑らかに。
+            let toHead = headPos - anchor
+            let facing = simd_quatf(angle: atan2(toHead.x, toHead.z), axis: [0, 1, 0])
+            let yaw = simd_quatf(angle: vm.videoRotationH * .pi / 180, axis: [0, 1, 0])
+            let pitch = simd_quatf(angle: vm.videoRotationV * .pi / 180, axis: [1, 0, 0])
+            let targetOrientation = facing * yaw * pitch
+            root.orientation = simd_slerp(root.orientation, targetOrientation, 0.1)
+
+            // 顔中心 (未検出は画像中心) が anchor に一致する位置へゆっくり lerp
+            let c = vm.videoFaceCenter ?? SIMD2<Float>(0.5, 0.5)
+            let w = Float(vm.videoSize.width)
+            let h = Float(vm.videoSize.height)
+            let localOffset = SIMD3<Float>((c.x - 0.5) * w, (c.y - 0.5) * h, 0)
+            let target = anchor - root.orientation.act(localOffset * root.scale.x)
+            root.position = mix(root.position, target, t: 0.08)
+        }
+    }
+
+    // MARK: - Face-Centered Placement
+
+    /// 検出した顔中心 (無ければ画像中心) が「頭の正面 + オフセット」に来るよう
+    /// スライドショーパネルを配置し、ヨーだけ頭に向ける。
+    /// 手の甲追従が有効な間は位置の主導権をそちらに譲る。
+    private func placeSlideshowByFace() {
+        guard mediaVM.slideshowFaceCenterEnabled,
+              !mediaVM.slideshowFollowHandEnabled,
+              let headPos = handTracking.headPosition() else { return }
+
+        let fwd = handTracking.headForwardVector() ?? SIMD3<Float>(0, 0, -1)
+        let right = handTracking.headRightVector() ?? SIMD3<Float>(1, 0, 0)
+        let anchor = headPos
+            + fwd * mediaVM.slideshowFaceDistance
+            + SIMD3<Float>(0, mediaVM.slideshowFaceHeight, 0)
+            + right * mediaVM.slideshowFaceLateral
+
+        // ヨーだけ頭に向ける (既存の回転スライダーは相対回転として合成される)
+        let toHead = headPos - anchor
+        slideshowFaceYaw = atan2(toHead.x, toHead.z)
+        updateSlideshowRotation()
+
+        // 顔中心のパネルローカルオフセット。Vision 座標は原点左下、パネルローカルは中心原点 Y 上向き。
+        let c = mediaVM.slideshowFaceCenter ?? SIMD2<Float>(0.5, 0.5)
+        let w = Float(mediaVM.slideshowDisplaySize.width)
+        let h = Float(mediaVM.slideshowDisplaySize.height)
+        let localOffset = SIMD3<Float>((c.x - 0.5) * w, (c.y - 0.5) * h, 0)
+
+        let orientation = slideshowRootEntity.orientation
+        let scale = slideshowRootEntity.scale.x
+        slideshowRootEntity.position = anchor - orientation.act(localOffset * scale)
     }
 
     // MARK: - Slideshow Entity
@@ -701,7 +865,13 @@ struct ImmersiveView: View {
     private func updateSlideshowRotation() {
         let yaw = simd_quatf(angle: mediaVM.slideshowRotationH * .pi / 180, axis: [0, 1, 0])
         let pitch = simd_quatf(angle: mediaVM.slideshowRotationV * .pi / 180, axis: [1, 0, 0])
-        slideshowRootEntity.orientation = yaw * pitch
+        // 顔中心配置モード中は「頭に向くヨー」をベースにスライダー回転を相対適用
+        if mediaVM.slideshowFaceCenterEnabled, let base = slideshowFaceYaw {
+            let facing = simd_quatf(angle: base, axis: [0, 1, 0])
+            slideshowRootEntity.orientation = facing * yaw * pitch
+        } else {
+            slideshowRootEntity.orientation = yaw * pitch
+        }
     }
 
     // MARK: - Gestures

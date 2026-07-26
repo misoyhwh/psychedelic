@@ -25,6 +25,9 @@ class AppModel {
     // 日付フィルター (動画)
     private static let illustServerVideoDateSourceKey = "illustServerVideoDateSource"
     private static let illustServerVideoDatePresetKey = "illustServerVideoDatePreset"
+    // お気に入りフィルター (0 = なし、1...10 = その値以上)
+    private static let illustServerImageFavoriteMinKey = "illustServerImageFavoriteMin"
+    private static let illustServerVideoFavoriteMinKey = "illustServerVideoFavoriteMin"
     private static let illustServerHostDefault = "http://misoyhwhmac-mini:8080/"
 
     var illustServerHost: String = {
@@ -90,6 +93,20 @@ class AppModel {
     var illustServerVideoDatePreset: String = UserDefaults.standard.string(forKey: AppModel.illustServerVideoDatePresetKey) ?? "all" {
         didSet {
             UserDefaults.standard.set(illustServerVideoDatePreset, forKey: AppModel.illustServerVideoDatePresetKey)
+        }
+    }
+
+    /// 画像サーバ検索のお気に入りフィルター (0 = なし、N = その番号のみ)。
+    var illustServerImageFavoriteMin: Int = UserDefaults.standard.integer(forKey: AppModel.illustServerImageFavoriteMinKey) {
+        didSet {
+            UserDefaults.standard.set(illustServerImageFavoriteMin, forKey: AppModel.illustServerImageFavoriteMinKey)
+        }
+    }
+
+    /// 動画サーバ検索のお気に入りフィルター (0 = なし、N = その番号のみ)。
+    var illustServerVideoFavoriteMin: Int = UserDefaults.standard.integer(forKey: AppModel.illustServerVideoFavoriteMinKey) {
+        didSet {
+            UserDefaults.standard.set(illustServerVideoFavoriteMin, forKey: AppModel.illustServerVideoFavoriteMinKey)
         }
     }
 

@@ -125,11 +125,23 @@ class MediaPanelViewModel {
     var videoSwayEnabled: Bool = false
     var videoSwayAmplitude: Float = 0.3   // left/right meters (0.05...1.0)
     var videoSwaySpeed: Float = 0.2       // cycles per second (0.02...0.5)
+    // Face centering (video panel) — 連続追跡: 一定間隔で顔検出し続け、パネルが顔を正面に保つ
+    var videoFaceCenterEnabled: Bool = false
+    var videoFaceDistance: Float = 2.0   // meters in front of head (0.5...4.0)
+    var videoFaceHeight: Float = 0.0     // vertical offset meters (-1.0...1.0)
+    var videoFaceLateral: Float = 0.0    // head-relative right(+)/left(-) meters (-1.0...1.0)
+    var videoFaceInterval: Float = 1.0   // detection interval seconds (0.5...3.0)
+    /// 最新の検出結果 (Vision 正規化座標、原点左下)。未検出は nil = 画像中心扱い。
+    var videoFaceCenter: SIMD2<Float>? = nil
+    private var videoFaceDetectTimer: Timer?
+    private var videoFaceDetectionInFlight = false
+
     // Hand follow (video panel)
     var videoFollowHandEnabled: Bool = false
     var videoFollowHand: FollowHand = .left
     var videoFollowHandHeight: Float = 0.3   // meters above back of hand (0.0...1.0)
     var videoFollowHandLateral: Float = 0.0  // meters to the right (+) / left (-) of hand, head-relative (-1.0...1.0)
+    var videoFollowHandDepth: Float = 0.0    // meters away (+) / toward viewer (-), head-relative (-1.0...1.0)
     var videoVersion: Int = 0
 
     var videoCurrentTime: Double = 0
@@ -149,6 +161,10 @@ class MediaPanelViewModel {
     var videoServerLastTags: String = ""
     /// 検索が最低 1 回でも実行されたかどうか。件数表示の可否判定に使う。
     var videoServerSearchDone: Bool = false
+    /// 現在再生中プレイリスト動画のお気に入り (1...10、未設定は nil)
+    var videoCurrentFavorite: Int? = nil
+    var videoFavoriteBusy: Bool = false
+    private var videoFavoriteTask: Task<Void, Never>?
     var videoSortOrder: ServerSortOrder = .filename
     var videoDatePreset: DateRangePreset = .all
     private var videoServerSearchTask: Task<Void, Never>?
@@ -199,11 +215,22 @@ class MediaPanelViewModel {
     var slideshowRotationV: Float = 0
     /// パネル湾曲量。0 = フラット、正値 = こちら向きに弧 (concave)、負値 = 奥向きに弧 (convex)。範囲は -1.0...1.0。
     var slideshowCurveAmount: Float = 0
+    // Face centering (slideshow panel) — 顔検出して毎スライド頭の正面に配置
+    var slideshowFaceCenterEnabled: Bool = false
+    var slideshowFaceDistance: Float = 2.0   // meters in front of head (0.5...4.0)
+    var slideshowFaceHeight: Float = 0.0     // vertical offset meters (-1.0...1.0)
+    var slideshowFaceLateral: Float = 0.0    // head-relative right(+)/left(-) meters (-1.0...1.0)
+    /// 検出した顔中心 (Vision 正規化座標、原点左下)。未検出/無効時は nil = 画像中心扱い。
+    var slideshowFaceCenter: SIMD2<Float>? = nil
+    /// 配置トリガー。検出完了ごとに bump し、ImmersiveView が onChange で配置する。
+    var slideshowFacePlacementTick: Int = 0
+
     // Hand follow (slideshow panel)
     var slideshowFollowHandEnabled: Bool = false
     var slideshowFollowHand: FollowHand = .left
     var slideshowFollowHandHeight: Float = 0.3   // meters above back of hand (0.0...1.0)
     var slideshowFollowHandLateral: Float = 0.0  // meters to the right (+) / left (-) of hand, head-relative (-1.0...1.0)
+    var slideshowFollowHandDepth: Float = 0.0    // meters away (+) / toward viewer (-), head-relative (-1.0...1.0)
     var slideshowTexture: TextureResource?
     var slideshowRightTexture: TextureResource?
     var slideshowIsStereo: Bool = false
@@ -237,6 +264,11 @@ class MediaPanelViewModel {
     var slideshowServerLastTags: String = ""
     /// 検索が最低 1 回でも実行されたかどうか。件数表示の可否判定に使う。
     var slideshowServerSearchDone: Bool = false
+    /// 現在表示中スライドショー画像のお気に入り (1...10、未設定は nil)
+    var slideshowCurrentFavorite: Int? = nil
+    var slideshowFavoriteBusy: Bool = false
+    private var slideshowFavoriteTask: Task<Void, Never>?
+    private var slideshowServerClient: IllustServerClient?
     var slideshowSortOrder: ServerSortOrder = .filename
     var slideshowDatePreset: DateRangePreset = .all
 
@@ -376,6 +408,9 @@ class MediaPanelViewModel {
         itemStatusObservation = nil
         pendingAutoplay = false
 
+        // 新しい動画では顔位置を仕切り直す (検出タイマー自体は継続)
+        videoFaceCenter = nil
+
         // Stop old player
         player?.pause()
         player = nil
@@ -434,6 +469,50 @@ class MediaPanelViewModel {
         player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
+    // MARK: - Video Face Detection (continuous)
+
+    /// 顔検出ループを開始する (既存タイマーは張り替え)。videoFaceInterval 変更時も呼び直す。
+    func startVideoFaceDetection() {
+        stopVideoFaceDetectionTimer()
+        guard videoFaceCenterEnabled else { return }
+        let timer = Timer.scheduledTimer(
+            withTimeInterval: TimeInterval(videoFaceInterval),
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.detectVideoFaceTick()
+            }
+        }
+        videoFaceDetectTimer = timer
+        detectVideoFaceTick()
+    }
+
+    func stopVideoFaceDetection() {
+        stopVideoFaceDetectionTimer()
+        videoFaceCenter = nil
+    }
+
+    private func stopVideoFaceDetectionTimer() {
+        videoFaceDetectTimer?.invalidate()
+        videoFaceDetectTimer = nil
+    }
+
+    /// 現在の再生フレームを 1 枚取り出して顔検出。重複実行はスキップ。
+    private func detectVideoFaceTick() {
+        guard videoFaceCenterEnabled,
+              !videoFaceDetectionInFlight,
+              let output = videoOutput,
+              let player = player else { return }
+        let time = player.currentTime()
+        guard let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else { return }
+        videoFaceDetectionInFlight = true
+        Task { [weak self] in
+            let center = await SlideshowEngine.detectFaceCenter(inPixelBuffer: buffer)
+            self?.videoFaceCenter = center
+            self?.videoFaceDetectionInFlight = false
+        }
+    }
+
     // MARK: - Video Server Playlist
 
     /// illust-server からタグ検索で動画プレイリストを構築し、先頭から再生開始。
@@ -443,7 +522,8 @@ class MediaPanelViewModel {
         tags: [String],
         ratings: [String],
         after: Int? = nil,
-        sortOrder: ServerSortOrder = .filename
+        sortOrder: ServerSortOrder = .filename,
+        favorite: Int = 0
     ) {
         videoServerSearchTask?.cancel()
 
@@ -460,21 +540,18 @@ class MediaPanelViewModel {
         videoServerSearchTask = Task { [weak self] in
             guard let self else { return }
             do {
-                var assets = try await self.fetchAllAssets(
+                var assets = try await self.fetchAssetsWithFavorite(
                     client: client,
                     tags: tags,
                     ratings: ratings,
                     mediaType: "video",
                     after: after,
                     sort: sortOrder.serverSortValue,
+                    favorite: favorite,
                     cap: 500
                 )
                 if Task.isCancelled { return }
-                if sortOrder == .filename {
-                    assets.sort { lhs, rhs in
-                        lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
-                    }
-                }
+                assets = Self.sortAssets(assets, order: sortOrder)
                 self.videoPlaylist = assets
                 self.videoPlaylistIndex = 0
                 self.videoServerTotalCount = assets.count
@@ -523,6 +600,89 @@ class MediaPanelViewModel {
         let url = client.mediaURL(hash: asset.hash)
         loadVideo(url: url)
         playVideo()
+        refreshVideoFavorite()
+    }
+
+    // MARK: - Favorites (fav1...fav10 tags on illust-server)
+
+    var currentSlideshowHash: String? {
+        guard slideshowCurrentIndex >= 0, slideshowCurrentIndex < slideshowImages.count else { return nil }
+        return slideshowImages[slideshowCurrentIndex].hash
+    }
+
+    var currentVideoHash: String? {
+        guard videoPlaylistIndex >= 0, videoPlaylistIndex < videoPlaylist.count else { return nil }
+        return videoPlaylist[videoPlaylistIndex].hash
+    }
+
+    /// 現在のスライドショー画像のお気に入り値をサーバから取得し直す。
+    func refreshSlideshowFavorite() {
+        slideshowFavoriteTask?.cancel()
+        slideshowCurrentFavorite = nil
+        guard let client = slideshowServerClient, let hash = currentSlideshowHash else { return }
+        slideshowFavoriteTask = Task { [weak self] in
+            guard let tags = try? await client.assetTags(hash: hash), !Task.isCancelled else { return }
+            self?.slideshowCurrentFavorite = IllustServerFavorite.value(from: tags)
+        }
+    }
+
+    /// 現在のプレイリスト動画のお気に入り値をサーバから取得し直す。
+    func refreshVideoFavorite() {
+        videoFavoriteTask?.cancel()
+        videoCurrentFavorite = nil
+        guard let client = videoServerClient, let hash = currentVideoHash else { return }
+        videoFavoriteTask = Task { [weak self] in
+            guard let tags = try? await client.assetTags(hash: hash), !Task.isCancelled else { return }
+            self?.videoCurrentFavorite = IllustServerFavorite.value(from: tags)
+        }
+    }
+
+    /// 現在のスライドショー画像にお気に入りを設定 (nil で解除)。
+    func setSlideshowFavorite(_ value: Int?) {
+        guard let client = slideshowServerClient, let hash = currentSlideshowHash,
+              !slideshowFavoriteBusy else { return }
+        slideshowFavoriteBusy = true
+        Task { [weak self] in
+            do {
+                try await Self.applyFavorite(client: client, hash: hash, newValue: value)
+                self?.slideshowCurrentFavorite = value
+            } catch {
+                print("Failed to set slideshow favorite: \(error)")
+            }
+            self?.slideshowFavoriteBusy = false
+        }
+    }
+
+    /// 現在のプレイリスト動画にお気に入りを設定 (nil で解除)。
+    func setVideoFavorite(_ value: Int?) {
+        guard let client = videoServerClient, let hash = currentVideoHash,
+              !videoFavoriteBusy else { return }
+        videoFavoriteBusy = true
+        Task { [weak self] in
+            do {
+                try await Self.applyFavorite(client: client, hash: hash, newValue: value)
+                self?.videoCurrentFavorite = value
+            } catch {
+                print("Failed to set video favorite: \(error)")
+            }
+            self?.videoFavoriteBusy = false
+        }
+    }
+
+    /// 既存の fav タグを全て外してから新しい値を付け直す (冪等)。
+    private static func applyFavorite(client: IllustServerClient, hash: String, newValue: Int?) async throws {
+        let tags = try await client.assetTags(hash: hash)
+        for tag in tags where tag.namespace == IllustServerFavorite.namespace
+            && IllustServerFavorite.value(fromTagName: tag.name) != nil {
+            try await client.deleteTag(hash: hash, tagId: tag.tagId)
+        }
+        if let v = newValue {
+            try await client.addTag(
+                hash: hash,
+                namespace: IllustServerFavorite.namespace,
+                name: IllustServerFavorite.tagName(v)
+            )
+        }
     }
 
     private func loadVideoSize(from item: AVPlayerItem) async {
@@ -647,7 +807,8 @@ class MediaPanelViewModel {
         tags: [String],
         ratings: [String],
         after: Int? = nil,
-        sortOrder: ServerSortOrder = .filename
+        sortOrder: ServerSortOrder = .filename,
+        favorite: Int = 0
     ) {
         slideshowServerSearchTask?.cancel()
 
@@ -655,6 +816,7 @@ class MediaPanelViewModel {
             slideshowServerSearchError = "サーバ URL が無効です"
             return
         }
+        slideshowServerClient = client
 
         // Release any previously held local folder
         if let prev = slideshowAccessedURL {
@@ -670,30 +832,26 @@ class MediaPanelViewModel {
         slideshowServerSearchTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let assets = try await self.fetchAllAssets(
+                var assets = try await self.fetchAssetsWithFavorite(
                     client: client,
                     tags: tags,
                     ratings: ratings,
                     mediaType: "image",
                     after: after,
                     sort: sortOrder.serverSortValue,
+                    favorite: favorite,
                     cap: 2000
                 )
                 if Task.isCancelled { return }
+                assets = Self.sortAssets(assets, order: sortOrder)
 
-                var images = assets.map { asset -> SlideshowImage in
+                let images = assets.map { asset -> SlideshowImage in
                     SlideshowImage(
                         url: client.mediaURL(hash: asset.hash),
                         displayName: asset.displayName,
-                        tags: asset.tags
+                        tags: asset.tags,
+                        hash: asset.hash
                     )
-                }
-                if sortOrder == .filename {
-                    images.sort { lhs, rhs in
-                        let a = lhs.displayName ?? ""
-                        let b = rhs.displayName ?? ""
-                        return a.localizedStandardCompare(b) == .orderedAscending
-                    }
                 }
                 self.slideshowImages = images
                 self.slideshowCurrentIndex = 0
@@ -714,6 +872,43 @@ class MediaPanelViewModel {
                     self.slideshowServerSearchInProgress = false
                 }
             }
+        }
+    }
+
+    /// お気に入りフィルタ付きの検索。favorite <= 0 なら通常検索。
+    /// favorite >= 1 のときはその番号の fav タグを AND 条件に加えて完全一致で絞る
+    /// (1...10 は順位ではなくラベルとして扱う)。
+    private func fetchAssetsWithFavorite(
+        client: IllustServerClient,
+        tags: [String],
+        ratings: [String],
+        mediaType: String,
+        after: Int?,
+        sort: String?,
+        favorite: Int,
+        cap: Int
+    ) async throws -> [IllustServerAsset] {
+        var effectiveTags = tags
+        if favorite >= 1 {
+            effectiveTags.append("\(IllustServerFavorite.namespace):\(IllustServerFavorite.tagName(favorite))")
+        }
+        return try await fetchAllAssets(
+            client: client, tags: effectiveTags, ratings: ratings,
+            mediaType: mediaType, after: after, sort: sort, cap: cap
+        )
+    }
+
+    /// 並び順のクライアント側適用 (ファイル名ソートはサーバに無いためここで行う)。
+    private static func sortAssets(_ assets: [IllustServerAsset], order: ServerSortOrder) -> [IllustServerAsset] {
+        switch order {
+        case .filename:
+            return assets.sorted {
+                $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+            }
+        case .posted:
+            return assets.sorted { ($0.postedAt ?? $0.addedAt) > ($1.postedAt ?? $1.addedAt) }
+        case .added:
+            return assets.sorted { $0.addedAt > $1.addedAt }
         }
     }
 
@@ -792,6 +987,8 @@ class MediaPanelViewModel {
         guard slideshowCurrentIndex < slideshowImages.count else { return }
         let image = slideshowImages[slideshowCurrentIndex]
 
+        refreshSlideshowFavorite()
+
         // Cancel previous load if still in progress
         slideshowLoadTask?.cancel()
 
@@ -819,6 +1016,18 @@ class MediaPanelViewModel {
                 slideshowIsStereo = textures.isStereo
                 slideshowDisplaySize = textures.displaySize
                 slideshowTextureVersion += 1   // ← この時点でスライドは即座に切り替わる
+
+                // 顔中心配置: 表示を止めずに後追いで検出 → 配置トリガー
+                if slideshowFaceCenterEnabled {
+                    if let leftCG = textures.leftDisplayImage {
+                        let center = await SlideshowEngine.detectFaceCenter(in: leftCG)
+                        guard !Task.isCancelled else { return }
+                        slideshowFaceCenter = center
+                    } else {
+                        slideshowFaceCenter = nil
+                    }
+                    slideshowFacePlacementTick += 1
+                }
 
                 // Phase 2: 前景マスクを後追い生成。重い/失敗してもスライド送りはブロックしない。
                 if slideshowForegroundKeyEnabled, let leftCG = textures.leftDisplayImage {

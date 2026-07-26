@@ -92,6 +92,40 @@ struct IllustServerTag: Codable, Identifiable, Sendable, Hashable {
     }
 }
 
+struct IllustServerAssetTag: Codable, Sendable, Hashable {
+    let tagId: Int
+    let namespace: String
+    let name: String
+
+    enum CodingKeys: String, CodingKey {
+        case tagId = "tag_id"
+        case namespace, name
+    }
+}
+
+/// お気に入り (1...10) をタグとして表現するためのヘルパー。
+/// サーバ側のスキーマ変更なしで既存のタグ API に載せる。
+enum IllustServerFavorite {
+    static let namespace = "general"
+
+    static func tagName(_ value: Int) -> String { "fav\(value)" }
+
+    /// "fav7" → 7。fav タグでなければ nil。
+    static func value(fromTagName name: String) -> Int? {
+        guard name.hasPrefix("fav"),
+              let v = Int(name.dropFirst(3)),
+              (1...10).contains(v) else { return nil }
+        return v
+    }
+
+    /// タグ一覧からお気に入り値 (複数あれば最大) を抽出。
+    static func value(from tags: [IllustServerAssetTag]) -> Int? {
+        tags.compactMap { tag in
+            tag.namespace == namespace ? value(fromTagName: tag.name) : nil
+        }.max()
+    }
+}
+
 struct IllustServerHealth: Codable, Sendable {
     let status: String
     let dbOk: Bool
@@ -237,7 +271,54 @@ final class IllustServerClient: Sendable {
         return try await getJSON(path: "api/tags/popular", query: items)
     }
 
+    // MARK: Asset tags (favorites)
+
+    func assetTags(hash: String) async throws -> [IllustServerAssetTag] {
+        try await getJSON(path: "api/assets/\(hash)/tags")
+    }
+
+    func addTag(hash: String, namespace: String, name: String) async throws {
+        struct Body: Encodable {
+            let namespace: String
+            let name: String
+            let source: String
+        }
+        let body = try JSONEncoder().encode(Body(namespace: namespace, name: name, source: "manual"))
+        _ = try await requestData(path: "api/assets/\(hash)/tags", method: "POST", body: body)
+    }
+
+    func deleteTag(hash: String, tagId: Int) async throws {
+        _ = try await requestData(path: "api/assets/\(hash)/tags/\(tagId)", method: "DELETE", body: nil)
+    }
+
     // MARK: Private
+
+    private func requestData(path: String, method: String, body: Data?) async throws -> Data {
+        guard let requestURL = url(forPath: path, query: nil) else {
+            throw IllustServerError.invalidHost
+        }
+        var req = URLRequest(url: requestURL)
+        req.httpMethod = method
+        if let body {
+            req.httpBody = body
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        do {
+            let (data, response) = try await session.data(for: req)
+            guard let http = response as? HTTPURLResponse else {
+                throw IllustServerError.requestFailed(-1)
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                print("[IllustServerClient] HTTP \(http.statusCode) from \(method) \(requestURL)")
+                throw IllustServerError.requestFailed(http.statusCode)
+            }
+            return data
+        } catch let e as IllustServerError {
+            throw e
+        } catch {
+            throw IllustServerError.transportError(error)
+        }
+    }
 
     /// baseURL + path を URLComponents 経由で安全に結合する。
     /// path は先頭 `/` 必須 (relative path 扱いの曖昧さを排除)。

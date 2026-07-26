@@ -28,6 +28,8 @@ final class HandTrackingManager {
     private var worldProvider: WorldTrackingProvider?
     private var updateTask: Task<Void, Never>?
     private(set) var isRunning = false
+    /// 現在のセッションでハンドトラッキングが有効か (false = 頭の姿勢のみ)。
+    private(set) var handsActive = false
 
     /// 手の甲 (middleFingerMetacarpal、無ければ手首) のワールド座標。未トラッキング時は nil。
     private(set) var leftHandPosition: SIMD3<Float>?
@@ -42,28 +44,42 @@ final class HandTrackingManager {
         }
     }
 
-    /// セッションを開始する (既に動作中なら何もしない)。
-    func startIfNeeded() {
-        guard !isRunning else { return }
-        guard HandTrackingProvider.isSupported else {
-            print("Hand tracking not supported on this platform")
-            return
+    /// セッションを開始する。`hands: false` なら頭の姿勢 (WorldTrackingProvider) のみで起動。
+    /// 既に必要な構成で動作中なら何もしない。頭のみ → 手が必要になったら作り直す。
+    func startIfNeeded(hands: Bool = true) {
+        let wantHands = hands && HandTrackingProvider.isSupported
+        if isRunning {
+            guard wantHands && !handsActive else { return }
+            stop()  // 頭のみ → 手つきに昇格するため再起動
+        }
+        if hands && !HandTrackingProvider.isSupported {
+            print("Hand tracking not supported on this platform — starting world tracking only")
         }
         isRunning = true
+        handsActive = wantHands
 
-        let provider = HandTrackingProvider()
-        self.provider = provider
-        // 頭の向き (デバイスアンカー) から水平オフセットの左右方向を得るために併走させる
+        // 頭の向き (デバイスアンカー) はどのモードでも使う
         let world = WorldTrackingProvider()
         self.worldProvider = world
+
+        var handProvider: HandTrackingProvider? = nil
+        if wantHands {
+            let p = HandTrackingProvider()
+            self.provider = p
+            handProvider = p
+        }
 
         updateTask = Task { [weak self] in
             do {
                 guard let session = self?.session else { return }
-                try await session.run([provider, world])
-                for await update in provider.anchorUpdates {
-                    guard let self, !Task.isCancelled else { break }
-                    self.apply(update)
+                if let handProvider {
+                    try await session.run([handProvider, world])
+                    for await update in handProvider.anchorUpdates {
+                        guard let self, !Task.isCancelled else { break }
+                        self.apply(update)
+                    }
+                } else {
+                    try await session.run([world])
                 }
             } catch {
                 print("Hand tracking session failed: \(error)")
@@ -80,23 +96,43 @@ final class HandTrackingManager {
         provider = nil
         worldProvider = nil
         isRunning = false
+        handsActive = false
         leftHandPosition = nil
         rightHandPosition = nil
+    }
+
+    /// 頭 (デバイス) のワールド座標。取れない場合は nil。
+    func headPosition() -> SIMD3<Float>? {
+        guard let t = deviceTransform() else { return nil }
+        return SIMD3<Float>(t.columns.3.x, t.columns.3.y, t.columns.3.z)
     }
 
     /// 頭 (デバイス) の右方向を水平面に投影して正規化したベクトル。
     /// デバイスアンカーが取れない場合は nil (呼び出し側でワールド X 軸にフォールバック)。
     func headRightVector() -> SIMD3<Float>? {
+        guard let t = deviceTransform() else { return nil }
+        return normalizedHorizontal(SIMD3<Float>(t.columns.0.x, 0, t.columns.0.z))
+    }
+
+    /// 頭 (デバイス) の前方向 (視線の向く先 = 奥) を水平面に投影して正規化したベクトル。
+    /// カメラは -Z を向くため columns.2 を反転する。取れない場合は nil (ワールド -Z にフォールバック)。
+    func headForwardVector() -> SIMD3<Float>? {
+        guard let t = deviceTransform() else { return nil }
+        return normalizedHorizontal(SIMD3<Float>(-t.columns.2.x, 0, -t.columns.2.z))
+    }
+
+    private func deviceTransform() -> simd_float4x4? {
         guard let world = worldProvider, world.state == .running,
               let device = world.queryDeviceAnchor(atTimestamp: CACurrentMediaTime()) else {
             return nil
         }
-        let t = device.originFromAnchorTransform
-        var right = SIMD3<Float>(t.columns.0.x, 0, t.columns.0.z)
-        let len = simd_length(right)
+        return device.originFromAnchorTransform
+    }
+
+    private func normalizedHorizontal(_ v: SIMD3<Float>) -> SIMD3<Float>? {
+        let len = simd_length(v)
         guard len > 0.0001 else { return nil }
-        right /= len
-        return right
+        return v / len
     }
 
     // MARK: - Private
