@@ -211,6 +211,11 @@ final class IllustServerClient: Sendable {
         url(forPath: "/thumb/\(hash)", query: nil) ?? baseURL
     }
 
+    /// 事前生成されたアウトペイント拡張画像 (WebP)。未生成の asset は 404。
+    func outpaintURL(hash: String) -> URL {
+        url(forPath: "/outpaint/\(hash)", query: nil) ?? baseURL
+    }
+
     // MARK: Endpoints
 
     func health() async throws -> IllustServerHealth {

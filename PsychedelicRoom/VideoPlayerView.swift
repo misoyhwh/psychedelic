@@ -216,6 +216,12 @@ class MediaPanelViewModel {
     var slideshowRotationV: Float = 0
     /// パネル湾曲量。0 = フラット、正値 = こちら向きに弧 (concave)、負値 = 奥向きに弧 (convex)。範囲は -1.0...1.0。
     var slideshowCurveAmount: Float = 0
+    /// パネル垂直湾曲量。0 = フラット、正値 = 上下端がこちら向き、負値 = 奥向き。範囲は -1.0...1.0。
+    var slideshowCurveVAmount: Float = 0
+    // Outpaint background (slideshow panel) — サーバ事前生成の拡張背景
+    var slideshowOutpaintEnabled: Bool = false
+    var slideshowOutpaintTexture: TextureResource?
+
     // Face centering (slideshow panel) — 顔検出して毎スライド頭の正面に配置
     var slideshowFaceCenterEnabled: Bool = false
     var slideshowFaceDistance: Float = 2.0   // meters in front of head (0.5...4.0)
@@ -1013,12 +1019,25 @@ class MediaPanelViewModel {
                 slideshowRightTexture = nil
                 slideshowForegroundMask = nil
                 slideshowForegroundMaskRight = nil
+                slideshowOutpaintTexture = nil  // 前の画像の拡張背景を持ち越さない
 
                 slideshowTexture = textures.leftTexture
                 slideshowRightTexture = textures.rightTexture
                 slideshowIsStereo = textures.isStereo
                 slideshowDisplaySize = textures.displaySize
                 slideshowTextureVersion += 1   // ← この時点でスライドは即座に切り替わる
+
+                // 拡張背景 (アウトペイント): サーバに事前生成があれば後追いで表示 (404 = なし)
+                if slideshowOutpaintEnabled,
+                   let hash = image.hash,
+                   let client = slideshowServerClient {
+                    let tex = await SlideshowEngine.remoteTexture(from: client.outpaintURL(hash: hash))
+                    guard !Task.isCancelled else { return }
+                    if tex != nil {
+                        slideshowOutpaintTexture = tex
+                        slideshowTextureVersion += 1
+                    }
+                }
 
                 // 顔中心配置: 表示を止めずに後追いで検出 → 配置トリガー
                 if slideshowFaceCenterEnabled {
@@ -1054,6 +1073,25 @@ class MediaPanelViewModel {
                     print("Failed to load slideshow image: \(error)")
                 }
             }
+        }
+    }
+
+    // MARK: - Slideshow Outpaint Background
+
+    /// 拡張背景トグルの変更を現在の画像に反映する。
+    /// ON: 現在画像の outpaint をサーバから取得 (404 なら背景なしのまま)。OFF: 背景を消す。
+    func refreshSlideshowOutpaint() {
+        guard slideshowOutpaintEnabled else {
+            slideshowOutpaintTexture = nil
+            slideshowTextureVersion += 1
+            return
+        }
+        guard let client = slideshowServerClient, let hash = currentSlideshowHash else { return }
+        Task { [weak self] in
+            let tex = await SlideshowEngine.remoteTexture(from: client.outpaintURL(hash: hash))
+            guard let self else { return }
+            self.slideshowOutpaintTexture = tex
+            self.slideshowTextureVersion += 1
         }
     }
 

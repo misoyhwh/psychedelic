@@ -329,6 +329,17 @@ class SlideshowEngine {
         return URLSession(configuration: config)
     }()
 
+    /// リモート画像 URL (WebP 等) を取得して TextureResource 化する。404 や失敗は nil。
+    /// 事前生成アウトペイント (/outpaint/{hash}) の取得に使う。
+    static func remoteTexture(from url: URL) async -> TextureResource? {
+        guard let data = try? await fetchData(from: url),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            return nil
+        }
+        return try? await TextureResource(image: cgImage, options: .init(semantic: .color))
+    }
+
     private static func fetchData(from url: URL) async throws -> Data {
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData

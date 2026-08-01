@@ -1030,7 +1030,7 @@ struct ContentView: View {
                     }
 
                     VStack(alignment: .leading) {
-                        Text("パネル湾曲: \(slideshowCurveLabel)")
+                        Text("水平湾曲: \(slideshowCurveLabel)")
                         Slider(value: Binding(
                             get: { mediaVM.slideshowCurveAmount },
                             set: { mediaVM.slideshowCurveAmount = $0 }
@@ -1042,6 +1042,37 @@ struct ContentView: View {
                             Spacer()
                             Text("こちら向き →").font(.caption2).foregroundStyle(.secondary)
                         }
+                    }
+
+                    VStack(alignment: .leading) {
+                        Text("垂直湾曲: \(slideshowCurveVLabel)")
+                        Slider(value: Binding(
+                            get: { mediaVM.slideshowCurveVAmount },
+                            set: { mediaVM.slideshowCurveVAmount = $0 }
+                        ), in: -1.0...1.0, step: 0.05)
+                        HStack {
+                            Text("← 奥向き").font(.caption2).foregroundStyle(.secondary)
+                            Spacer()
+                            Text("まっすぐ").font(.caption2).foregroundStyle(.secondary)
+                            Spacer()
+                            Text("こちら向き →").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+
+                    // Outpaint background (拡張背景)
+                    Toggle("拡張背景 (アウトペイント)", isOn: Binding(
+                        get: { mediaVM.slideshowOutpaintEnabled },
+                        set: {
+                            mediaVM.slideshowOutpaintEnabled = $0
+                            mediaVM.refreshSlideshowOutpaint()
+                        }
+                    ))
+                    .toggleStyle(.switch)
+
+                    if mediaVM.slideshowOutpaintEnabled {
+                        Text("サーバで事前生成した拡張画像をパネルの外側に表示します (未生成の画像は通常表示)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
 
                     handFollowControls(
@@ -1208,6 +1239,14 @@ struct ContentView: View {
     /// パネル湾曲スライダーの数値ラベル。0 近傍はフラット表記、それ以外は方向 + 倍率。
     private var slideshowCurveLabel: String {
         let v = mediaVM.slideshowCurveAmount
+        if abs(v) < 0.01 { return "まっすぐ" }
+        let pct = Int(round(abs(v) * 100))
+        return v > 0 ? "こちら向き \(pct)%" : "奥向き \(pct)%"
+    }
+
+    /// パネル垂直湾曲スライダーの数値ラベル。
+    private var slideshowCurveVLabel: String {
+        let v = mediaVM.slideshowCurveVAmount
         if abs(v) < 0.01 { return "まっすぐ" }
         let pct = Int(round(abs(v) * 100))
         return v > 0 ? "こちら向き \(pct)%" : "奥向き \(pct)%"

@@ -101,6 +101,7 @@ struct ImmersiveView: View {
             let _ = mediaVM.slideshowRotationH
             let _ = mediaVM.slideshowRotationV
             let _ = mediaVM.slideshowCurveAmount
+            let _ = mediaVM.slideshowCurveVAmount
             let _ = mediaVM.slideshowChromaKeyEnabled
             let _ = mediaVM.slideshowChromaKeyColor
             let _ = mediaVM.slideshowChromaThreshold
@@ -247,6 +248,9 @@ struct ImmersiveView: View {
                 // 検出方法の変更を現在の画像にも即反映 (再ロード → 再検出 → 再配置)
                 mediaVM.loadCurrentSlideshowImage()
             }
+        }
+        .onChange(of: mediaVM.slideshowCurveVAmount) {
+            updateSlideshowMesh()
         }
         .onChange(of: mediaVM.slideshowFaceDistance) {
             placeSlideshowByFace()
@@ -468,75 +472,111 @@ struct ImmersiveView: View {
         let mesh = makeCurvedPanelMesh(
             width: width,
             height: height,
-            curve: mediaVM.slideshowCurveAmount
+            curveH: mediaVM.slideshowCurveAmount,
+            curveV: mediaVM.slideshowCurveVAmount
         )
         entity.model?.mesh = mesh
+
+        // 拡張背景 (アウトペイント) も同じ湾曲に追従させる
+        if let background = slideshowRootEntity.findEntity(named: "slideshowOutpaint") as? ModelEntity {
+            background.model?.mesh = makeCurvedPanelMesh(
+                width: width * 2.0,
+                height: height * 2.0,
+                curveH: mediaVM.slideshowCurveAmount,
+                curveV: mediaVM.slideshowCurveVAmount
+            )
+            background.position.z = slideshowBackgroundZ(width: width, height: height)
+        }
+    }
+
+    /// 拡張背景の退避 Z 位置。凸 (奥向き) 湾曲時はパネルの張り出し分だけさらに奥へ。
+    private func slideshowBackgroundZ(width: Float, height: Float) -> Float {
+        let depth = max(
+            convexDepth(span: width, curve: mediaVM.slideshowCurveAmount),
+            convexDepth(span: height, curve: mediaVM.slideshowCurveVAmount)
+        )
+        return -(depth + 0.05)
     }
 
     /// curve = 0 でフラット、>0 でこちら向きの凹面、<0 で奥向きの凸面の
     /// 円筒セクションメッシュを生成する。湾曲は水平方向のみで縦は直線。
+    /// 既存呼び出し互換 (水平湾曲のみ)。動画パネルはこちらを使う。
     private func makeCurvedPanelMesh(width: Float, height: Float, curve: Float) -> MeshResource {
-        // ほぼ 0 ならフラットなプレーンに退避 (除算 0 回避)。
-        if abs(curve) < 0.01 {
+        makeCurvedPanelMesh(width: width, height: height, curveH: curve, curveV: 0)
+    }
+
+    /// 水平 (curveH)・垂直 (curveV) の 2 軸湾曲パネルメッシュを生成する。
+    /// 正値 = こちら向き (端がユーザー側 +Z)、負値 = 奥向き。両軸有効時は変位を加算した球面近似。
+    /// アーク長 = パネル寸法を保つため、湾曲を強めても表示面積は変わらない。
+    private func makeCurvedPanelMesh(width: Float, height: Float, curveH: Float, curveV: Float) -> MeshResource {
+        let hActive = abs(curveH) >= 0.01
+        let vActive = abs(curveV) >= 0.01
+        if !hActive && !vActive {
             return MeshResource.generatePlane(width: width, height: height)
         }
 
-        let segmentsX = 32
-        let maxAngle: Float = .pi * 0.8           // |curve| = 1.0 のとき ~144°
-        let angleTotal = abs(curve) * maxAngle    // パネル全幅で展開する角度
-        let radius = width / angleTotal           // アーク長 = width を保つ
+        let segX = 32
+        let segY = 32
+        let maxAngle: Float = .pi * 0.8   // |curve| = 1.0 のとき ~144°
+
+        let angleH = abs(curveH) * maxAngle
+        let radiusH: Float = hActive ? width / angleH : 0
+        let signH: Float = curveH >= 0 ? 1 : -1
+
+        let angleV = abs(curveV) * maxAngle
+        let radiusV: Float = vActive ? height / angleV : 0
+        let signV: Float = curveV >= 0 ? 1 : -1
 
         var positions: [SIMD3<Float>] = []
         var normals: [SIMD3<Float>] = []
         var uvs: [SIMD2<Float>] = []
-        positions.reserveCapacity((segmentsX + 1) * 2)
-        normals.reserveCapacity((segmentsX + 1) * 2)
-        uvs.reserveCapacity((segmentsX + 1) * 2)
+        let vertCount = (segX + 1) * (segY + 1)
+        positions.reserveCapacity(vertCount)
+        normals.reserveCapacity(vertCount)
+        uvs.reserveCapacity(vertCount)
 
-        let halfH = height / 2
+        for iy in 0...segY {
+            let vNorm = Float(iy) / Float(segY)   // 0 (下) ... 1 (上)。RealityKit は v=1 が上
+            let vCentered = vNorm - 0.5
+            let thetaV = vActive ? vCentered * angleV : 0
+            let y = vActive ? radiusV * sin(thetaV) : vCentered * height
+            let zV = vActive ? signV * radiusV * (1 - cos(thetaV)) : 0
 
-        for i in 0...segmentsX {
-            let uNorm = Float(i) / Float(segmentsX)        // 0 ... 1
-            let uCentered = uNorm - 0.5                    // -0.5 ... 0.5
-            let theta = uCentered * angleTotal             // -a/2 ... a/2
-            let x = radius * sin(theta)
-            let zMag = radius * (1 - cos(theta))
-            let z: Float
-            let normalX: Float
-            if curve > 0 {
-                // こちら向き concave: 端がユーザー側 (+z)
-                z = zMag
-                normalX = -sin(theta)
-            } else {
-                // 奥向き convex: 端が向こう側 (-z)
-                z = -zMag
-                normalX = sin(theta)
+            for ix in 0...segX {
+                let uNorm = Float(ix) / Float(segX)
+                let uCentered = uNorm - 0.5
+                let thetaH = hActive ? uCentered * angleH : 0
+                let x = hActive ? radiusH * sin(thetaH) : uCentered * width
+                let zH = hActive ? signH * radiusH * (1 - cos(thetaH)) : 0
+
+                positions.append(SIMD3<Float>(x, y, zH + zV))
+                // 接線ベクトル (dPos/du, dPos/dv) の外積から求めた法線
+                let n = SIMD3<Float>(
+                    -signH * sin(thetaH) * cos(thetaV),
+                    -signV * cos(thetaH) * sin(thetaV),
+                    cos(thetaH) * cos(thetaV)
+                )
+                normals.append(simd_normalize(n))
+                uvs.append(SIMD2<Float>(uNorm, vNorm))
             }
-            let normal = SIMD3<Float>(normalX, 0, cos(theta))
-
-            // top (RealityKit の generatePlane は v=1 が上、v=0 が下なので合わせる)
-            positions.append(SIMD3<Float>(x, halfH, z))
-            normals.append(normal)
-            uvs.append(SIMD2<Float>(uNorm, 1))
-            // bottom
-            positions.append(SIMD3<Float>(x, -halfH, z))
-            normals.append(normal)
-            uvs.append(SIMD2<Float>(uNorm, 0))
         }
 
         var indices: [UInt32] = []
-        indices.reserveCapacity(segmentsX * 6)
-        for i in 0..<segmentsX {
-            let tl = UInt32(2 * i)
-            let bl = UInt32(2 * i + 1)
-            let tr = UInt32(2 * (i + 1))
-            let br = UInt32(2 * (i + 1) + 1)
-            // CCW from +Z (user side)
-            indices.append(contentsOf: [tl, bl, tr])
-            indices.append(contentsOf: [tr, bl, br])
+        indices.reserveCapacity(segX * segY * 6)
+        let rowStride = UInt32(segX + 1)
+        for iy in 0..<segY {
+            for ix in 0..<segX {
+                let bl = UInt32(iy) * rowStride + UInt32(ix)
+                let br = bl + 1
+                let tl = bl + rowStride
+                let tr = tl + 1
+                // CCW from +Z (user side)
+                indices.append(contentsOf: [bl, br, tl])
+                indices.append(contentsOf: [tl, br, tr])
+            }
         }
 
-        var descriptor = MeshDescriptor(name: "SlideshowCurvedPanel")
+        var descriptor = MeshDescriptor(name: "CurvedPanel")
         descriptor.positions = MeshBuffer(positions)
         descriptor.normals = MeshBuffer(normals)
         descriptor.textureCoordinates = MeshBuffer(uvs)
@@ -545,9 +585,17 @@ struct ImmersiveView: View {
         do {
             return try MeshResource.generate(from: [descriptor])
         } catch {
-            print("Failed to build curved slideshow mesh: \(error)")
+            print("Failed to build curved panel mesh: \(error)")
             return MeshResource.generatePlane(width: width, height: height)
         }
+    }
+
+    /// 凸 (奥向き) 湾曲でパネル端が -Z 方向へ張り出す最大深さ。背景の退避距離計算に使う。
+    private func convexDepth(span: Float, curve: Float) -> Float {
+        guard curve < -0.01 else { return 0 }
+        let angleTotal = abs(curve) * .pi * 0.8
+        let radius = span / angleTotal
+        return radius * (1 - cos(angleTotal / 2))
     }
 
     private func updateVideoRotation() {
@@ -769,7 +817,8 @@ struct ImmersiveView: View {
             let mesh = makeCurvedPanelMesh(
                 width: width,
                 height: height,
-                curve: mediaVM.slideshowCurveAmount
+                curveH: mediaVM.slideshowCurveAmount,
+                curveV: mediaVM.slideshowCurveVAmount
             )
             var material: RealityKit.Material
 
@@ -807,6 +856,27 @@ struct ImmersiveView: View {
             entity.name = "slideshowPanel"
 
             slideshowRootEntity.addChild(entity)
+
+            // 拡張背景 (アウトペイント): サーバ事前生成の画像をパネル背後に敷く。
+            // サーバの生成仕様 (キャンバス 2 倍・元画像中央ピクセル一致) に合わせて
+            // パネルの 2 倍サイズ・中心一致で置くと継ぎ目が揃う。
+            if mediaVM.slideshowOutpaintEnabled, let outpaintTex = mediaVM.slideshowOutpaintTexture {
+                let outpaintScale: Float = 2.0
+                // パネルと同じ湾曲を背景にも適用して面の向きを揃える
+                let bgMesh = makeCurvedPanelMesh(
+                    width: width * outpaintScale,
+                    height: height * outpaintScale,
+                    curveH: mediaVM.slideshowCurveAmount,
+                    curveV: mediaVM.slideshowCurveVAmount
+                )
+                var bgMaterial = UnlitMaterial()
+                bgMaterial.color = .init(tint: .white, texture: .init(outpaintTex))
+                let background = ModelEntity(mesh: bgMesh, materials: [bgMaterial])
+                background.name = "slideshowOutpaint"
+                background.position = SIMD3<Float>(0, 0, slideshowBackgroundZ(width: width, height: height))
+                slideshowRootEntity.addChild(background)
+            }
+
             slideshowEntity = entity
             updateSlideshowVisibility()
             print("Slideshow entity created: \(width)x\(height), stereo=\(mediaVM.slideshowIsStereo)")
