@@ -81,6 +81,33 @@ enum DateRangePreset: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// 動画プレイリストの 1 要素。サーバ検索・ローカルフォルダの両方をこの型に正規化する。
+struct VideoPlaylistItem {
+    let url: URL
+    let displayName: String
+    /// illust-server の asset hash (サーバ検索由来のみ)。お気に入り表示/設定に使う。ローカルは nil。
+    var hash: String? = nil
+    /// サーバ検索由来のタグ (表示用)。ローカルは nil。
+    var tags: [String]? = nil
+    /// ローカルファイルの追加日 (追加日順ソート用)。サーバ由来は nil。
+    var addedDate: Date? = nil
+}
+
+/// ローカルフォルダ動画の並び順。
+enum LocalVideoSortOrder: String, CaseIterable, Identifiable {
+    case name
+    case dateAdded
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .name: return "名前順"
+        case .dateAdded: return "追加日順"
+        }
+    }
+}
+
 @Observable
 @MainActor
 class MediaPanelViewModel {
@@ -116,6 +143,8 @@ class MediaPanelViewModel {
     var videoRotationV: Float = 0
     /// パネル湾曲量。0 = フラット、正値 = こちら向きに弧 (concave)、負値 = 奥向きに弧 (convex)。範囲は -1.0...1.0。
     var videoCurveAmount: Float = 0
+    /// パネル垂直湾曲量。0 = フラット、正値 = 上下端がこちら向き、負値 = 奥向き。範囲は -1.0...1.0。
+    var videoCurveVAmount: Float = 0
     var videoBobEnabled: Bool = false
     var videoBobAmplitude: Float = 0.3    // vertical meters (0.05...1.0)
     var videoBobSpeed: Float = 0.2        // cycles per second (0.02...0.5)
@@ -137,6 +166,14 @@ class MediaPanelViewModel {
     private var videoFaceDetectTimer: Timer?
     private var videoFaceDetectionInFlight = false
 
+    // 黒フチ自動カット (動画) — フレーム外周の黒帯を検出してパネルをコンテンツ矩形に切り詰める
+    var videoAutoCropEnabled: Bool = false
+    var videoCropThreshold: Float = 0.06   // 黒判定の輝度しきい値 (0.02...0.2)
+    /// 検出されたコンテンツ矩形 (正規化・原点左下)。フルフレーム = クロップなし。
+    var videoCropRect: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+    private var videoAutoCropTimer: Timer?
+    private var videoAutoCropInFlight = false
+
     // Hand follow (video panel)
     var videoFollowHandEnabled: Bool = false
     var videoFollowHand: FollowHand = .left
@@ -149,9 +186,13 @@ class MediaPanelViewModel {
     var videoDuration: Double = 0
     var isSeeking: Bool = false
 
-    // Server video playlist state
-    var videoPlaylist: [IllustServerAsset] = []
+    // Video playlist state (server search / local folder 共通)
+    var videoPlaylist: [VideoPlaylistItem] = []
     var videoPlaylistIndex: Int = 0
+    /// ローカルフォルダ再生時のフォルダ URL (単一ファイル/サーバ時は nil)
+    var videoLocalFolderURL: URL? = nil
+    var videoLocalSortOrder: LocalVideoSortOrder = .name
+    private var videoFolderAccessedURL: URL?
     /// 1本の動画を何回再生してから次へ進むか (プレイリスト時)。1 = 1回再生して次へ。
     var videoRepeatCount: Int = 1
     /// 現在の動画の再生済み回数 (loadVideo でリセット)。
@@ -176,6 +217,8 @@ class MediaPanelViewModel {
     var videoColorTop: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
     var videoColorMiddle: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
     var videoColorBottom: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
+    /// 動画平均色の履歴 ([0] が最新、0.25 秒間隔 × 32 = 約 8 秒分)。Video Ripple の伝播に使う。
+    var videoColorHistory: [SIMD3<Float>] = Array(repeating: SIMD3<Float>(0.1, 0.1, 0.1), count: 32)
 
     var player: AVPlayer?
     private var videoAccessedURL: URL?
@@ -196,6 +239,10 @@ class MediaPanelViewModel {
     var slideshowColorTop: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
     var slideshowColorMiddle: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
     var slideshowColorBottom: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
+    /// スライド平均色の履歴 ([0] が最新、1 スライドごとに 1 エントリ)。Media Ripple の伝播に使う。
+    var slideshowColorHistory: [SIMD3<Float>] = Array(repeating: SIMD3<Float>(0.1, 0.1, 0.1), count: 32)
+    /// 現在表示中スライドのデコード済み画像 (Media Kaleido / Tunnel のシェーダ供給用)。
+    var slideshowCurrentImage: CGImage?
 
     // MARK: - Slideshow Panel
 
@@ -349,7 +396,7 @@ class MediaPanelViewModel {
                 case .failed:
                     print("Video item failed: \(item.error?.localizedDescription ?? "unknown")")
                     self.pendingAutoplay = false
-                    if self.videoSourceMode == .serverSearch && !self.videoPlaylist.isEmpty {
+                    if !self.videoPlaylist.isEmpty {
                         self.videoPlaylistNext()
                     }
                 default:
@@ -416,8 +463,9 @@ class MediaPanelViewModel {
         itemStatusObservation = nil
         pendingAutoplay = false
 
-        // 新しい動画では顔位置を仕切り直す (検出タイマー自体は継続)
+        // 新しい動画では顔位置・クロップ矩形を仕切り直す (検出タイマー自体は継続)
         videoFaceCenter = nil
+        videoCropRect = CGRect(x: 0, y: 0, width: 1, height: 1)
 
         // Stop old player
         player?.pause()
@@ -434,11 +482,12 @@ class MediaPanelViewModel {
             player?.play()
             return
         }
-        if videoSourceMode == .serverSearch && !videoPlaylist.isEmpty {
+        if !videoPlaylist.isEmpty {
             // 規定回数に達したら次の動画へ (loadVideo がカウントをリセット)。
+            // サーバ検索・ローカルフォルダ共通。
             videoPlaylistNext()
         } else {
-            // Local: 次が無いので同じ動画をループ継続。
+            // 単一ファイル: 次が無いので同じ動画をループ継続。
             videoCurrentPlayCount = 0
             player?.seek(to: .zero)
             player?.play()
@@ -475,6 +524,66 @@ class MediaPanelViewModel {
     func seekVideo(to seconds: Double) {
         let time = CMTime(seconds: seconds, preferredTimescale: 600)
         player?.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    /// 現在の再生フレームを 1 枚返す (Video Kaleido / Tunnel パターンのシェーダ供給用)。
+    func copyCurrentVideoPixelBuffer() -> CVPixelBuffer? {
+        guard let output = videoOutput, let player = player else { return nil }
+        let time = player.currentTime()
+        return output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil)
+    }
+
+    // MARK: - Video Auto Crop (黒フチ自動カット)
+
+    /// 黒フチ検出ループを開始する (0.5 秒間隔)。既存タイマーは張り替え。
+    func startVideoAutoCrop() {
+        stopVideoAutoCropTimer()
+        guard videoAutoCropEnabled else { return }
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.autoCropTick()
+            }
+        }
+        videoAutoCropTimer = timer
+        autoCropTick()
+    }
+
+    func stopVideoAutoCrop() {
+        stopVideoAutoCropTimer()
+        videoCropRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+    }
+
+    private func stopVideoAutoCropTimer() {
+        videoAutoCropTimer?.invalidate()
+        videoAutoCropTimer = nil
+    }
+
+    /// 現在フレームの黒フチを検出してクロップ矩形を更新。重複実行はスキップ。
+    private func autoCropTick() {
+        guard videoAutoCropEnabled,
+              !videoAutoCropInFlight,
+              let output = videoOutput,
+              let player = player else { return }
+        let time = player.currentTime()
+        guard let buffer = output.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) else { return }
+        videoAutoCropInFlight = true
+        let threshold = videoCropThreshold
+        Task { [weak self] in
+            let rect: CGRect = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    continuation.resume(returning: VideoBorderScanner.contentRect(in: buffer, blackThreshold: threshold))
+                }
+            }
+            guard let self else { return }
+            self.videoAutoCropInFlight = false
+            // 微小変化ではメッシュを作り直さない (無駄な再生成と微振動を防ぐ)
+            let cur = self.videoCropRect
+            let delta = abs(rect.minX - cur.minX) + abs(rect.minY - cur.minY)
+                + abs(rect.width - cur.width) + abs(rect.height - cur.height)
+            if delta > 0.02 {
+                self.videoCropRect = rect
+            }
+        }
     }
 
     // MARK: - Video Face Detection (continuous)
@@ -561,12 +670,21 @@ class MediaPanelViewModel {
                 )
                 if Task.isCancelled { return }
                 assets = Self.sortAssets(assets, order: sortOrder)
-                self.videoPlaylist = assets
+                // サーバフォルダとは排他 (プレイリストは共通型に正規化)
+                self.releaseLocalVideoFolder()
+                self.videoPlaylist = assets.map { asset in
+                    VideoPlaylistItem(
+                        url: client.mediaURL(hash: asset.hash),
+                        displayName: asset.displayName,
+                        hash: asset.hash,
+                        tags: asset.tags
+                    )
+                }
                 self.videoPlaylistIndex = 0
                 self.videoServerTotalCount = assets.count
                 self.videoServerSearchInProgress = false
                 self.videoServerSearchDone = true
-                if !assets.isEmpty {
+                if !self.videoPlaylist.isEmpty {
                     self.loadCurrentPlaylistVideo()
                 }
             } catch let e as IllustServerError {
@@ -603,13 +721,94 @@ class MediaPanelViewModel {
     }
 
     private func loadCurrentPlaylistVideo() {
-        guard videoPlaylistIndex < videoPlaylist.count,
-              let client = videoServerClient else { return }
-        let asset = videoPlaylist[videoPlaylistIndex]
-        let url = client.mediaURL(hash: asset.hash)
-        loadVideo(url: url)
+        guard videoPlaylistIndex >= 0, videoPlaylistIndex < videoPlaylist.count else { return }
+        let item = videoPlaylist[videoPlaylistIndex]
+        loadVideo(url: item.url)
         playVideo()
         refreshVideoFavorite()
+    }
+
+    // MARK: - Local Video Folder
+
+    static let supportedVideoExtensions: Set<String> = ["mov", "mp4", "m4v"]
+
+    /// 単一のローカル動画ファイルを再生する (プレイリストなし = 単体ループ)。
+    func selectLocalVideoFile(url: URL) {
+        releaseLocalVideoFolder()
+        videoPlaylist = []
+        videoPlaylistIndex = 0
+        loadVideo(url: url)
+        playVideo()
+    }
+
+    /// ローカルフォルダ内の動画を列挙してプレイリスト化し、先頭から連続再生する。
+    func loadLocalVideoFolder(url: URL) {
+        releaseLocalVideoFolder()
+        let accessing = url.startAccessingSecurityScopedResource()
+        if accessing {
+            videoFolderAccessedURL = url
+        }
+        videoLocalFolderURL = url
+
+        let fileManager = FileManager.default
+        var items: [VideoPlaylistItem] = []
+        if let enumerator = fileManager.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey, .addedToDirectoryDateKey, .creationDateKey],
+            options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+        ) {
+            while let fileURL = enumerator.nextObject() as? URL {
+                let ext = fileURL.pathExtension.lowercased()
+                guard Self.supportedVideoExtensions.contains(ext) else { continue }
+                let values = try? fileURL.resourceValues(forKeys: [.addedToDirectoryDateKey, .creationDateKey])
+                items.append(VideoPlaylistItem(
+                    url: fileURL,
+                    displayName: fileURL.lastPathComponent,
+                    hash: nil,
+                    addedDate: values?.addedToDirectoryDate ?? values?.creationDate
+                ))
+            }
+        }
+
+        videoPlaylist = Self.sortLocalItems(items, order: videoLocalSortOrder)
+        videoPlaylistIndex = 0
+        if !videoPlaylist.isEmpty {
+            loadCurrentPlaylistVideo()
+        }
+    }
+
+    /// 並び順変更を現在のローカルプレイリストへ反映する。再生中の動画は維持し、位置だけ追従。
+    func applyLocalVideoSort() {
+        guard videoLocalFolderURL != nil, !videoPlaylist.isEmpty else { return }
+        let currentURL = videoPlaylistIndex < videoPlaylist.count ? videoPlaylist[videoPlaylistIndex].url : nil
+        videoPlaylist = Self.sortLocalItems(videoPlaylist, order: videoLocalSortOrder)
+        if let currentURL, let newIndex = videoPlaylist.firstIndex(where: { $0.url == currentURL }) {
+            videoPlaylistIndex = newIndex
+        } else {
+            videoPlaylistIndex = 0
+        }
+    }
+
+    private static func sortLocalItems(_ items: [VideoPlaylistItem], order: LocalVideoSortOrder) -> [VideoPlaylistItem] {
+        switch order {
+        case .name:
+            return items.sorted {
+                $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+            }
+        case .dateAdded:
+            // 新しい順。追加日が取れないものは末尾。
+            return items.sorted {
+                ($0.addedDate ?? .distantPast) > ($1.addedDate ?? .distantPast)
+            }
+        }
+    }
+
+    private func releaseLocalVideoFolder() {
+        if let prev = videoFolderAccessedURL {
+            prev.stopAccessingSecurityScopedResource()
+            videoFolderAccessedURL = nil
+        }
+        videoLocalFolderURL = nil
     }
 
     // MARK: - Favorites (fav1...fav10 tags on illust-server)
@@ -752,6 +951,11 @@ class MediaPanelViewModel {
             videoColorTop = videoColorTop * (1.0 - blend) + sampledTop * blend
             videoColorMiddle = videoColorMiddle * (1.0 - blend) + sampledMiddle * blend
             videoColorBottom = videoColorBottom * (1.0 - blend) + sampledBottom * blend
+
+            // Video Ripple 用の色履歴: 3 点の平均を先頭に積む (0.25 秒間隔で呼ばれる)
+            let average = (videoColorTop + videoColorMiddle + videoColorBottom) / 3.0
+            videoColorHistory.removeLast()
+            videoColorHistory.insert(average, at: 0)
         }
     }
 
@@ -1025,6 +1229,7 @@ class MediaPanelViewModel {
                 slideshowRightTexture = textures.rightTexture
                 slideshowIsStereo = textures.isStereo
                 slideshowDisplaySize = textures.displaySize
+                slideshowCurrentImage = textures.leftDisplayImage  // Media Kaleido/Tunnel 用
                 slideshowTextureVersion += 1   // ← この時点でスライドは即座に切り替わる
 
                 // 拡張背景 (アウトペイント): サーバに事前生成があれば後追いで表示 (404 = なし)
@@ -1131,6 +1336,11 @@ class MediaPanelViewModel {
         slideshowColorTop = sampledTop
         slideshowColorMiddle = sampledMiddle
         slideshowColorBottom = sampledBottom
+
+        // Media Ripple 用の色履歴: スライドごとに平均色を先頭へ積む
+        let average = (slideshowColorTop + slideshowColorMiddle + slideshowColorBottom) / 3.0
+        slideshowColorHistory.removeLast()
+        slideshowColorHistory.insert(average, at: 0)
     }
 
     private func sampleImageRegion(_ base: UnsafeMutableRawPointer, bpr: Int, w: Int, h: Int,

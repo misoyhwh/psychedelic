@@ -38,6 +38,13 @@ struct ImmersiveView: View {
     private var sceneView: some View {
         RealityView { content in
             sceneReconstructor.configure(audioEngine: audioEngine)
+            // Kaleido / Tunnel パターン用に動画フレームと静止画 (スライド) の供給元を接続
+            sceneReconstructor.videoFrameProvider = { [weak mediaVM = mediaVM as MediaPanelViewModel?] in
+                mediaVM?.copyCurrentVideoPixelBuffer()
+            }
+            sceneReconstructor.stillImageProvider = { [weak mediaVM = mediaVM as MediaPanelViewModel?] in
+                mediaVM?.slideshowCurrentImage
+            }
             content.add(sceneReconstructor.rootEntity)
             content.add(occlusionPanel.rootEntity)
 
@@ -63,6 +70,7 @@ struct ImmersiveView: View {
             videoFaceFollowTimer?.invalidate()
             videoFaceFollowTimer = nil
             mediaVM.stopVideoFaceDetection()
+            mediaVM.stopVideoAutoCrop()
             handTracking.stop()
             videoFramePump?.detach()
         }
@@ -80,6 +88,9 @@ struct ImmersiveView: View {
             let _ = mediaVM.videoRotationH
             let _ = mediaVM.videoRotationV
             let _ = mediaVM.videoCurveAmount
+            let _ = mediaVM.videoCurveVAmount
+            let _ = mediaVM.videoAutoCropEnabled
+            let _ = mediaVM.videoCropRect
             let _ = mediaVM.videoBobEnabled
             let _ = mediaVM.videoSurgeEnabled
             let _ = mediaVM.videoSwayEnabled
@@ -166,7 +177,11 @@ struct ImmersiveView: View {
                 videoColorMode: appModel.videoColorMode,
                 videoColorTop: colorTop,
                 videoColorMiddle: colorMiddle,
-                videoColorBottom: colorBottom
+                videoColorBottom: colorBottom,
+                videoColorHistory: appModel.colorSource == .slideshow
+                    ? mediaVM.slideshowColorHistory
+                    : mediaVM.videoColorHistory,
+                mediaSourceIsSlideshow: appModel.colorSource == .slideshow
             )
             occlusionPanel.update(
                 enabled: appModel.occlusionPanelEnabled,
@@ -200,6 +215,15 @@ struct ImmersiveView: View {
             updateVideoRotation()
         }
         .onChange(of: mediaVM.videoCurveAmount) {
+            updateVideoMesh()
+        }
+        .onChange(of: mediaVM.videoCurveVAmount) {
+            updateVideoMesh()
+        }
+        .onChange(of: mediaVM.videoAutoCropEnabled) {
+            updateVideoMesh()
+        }
+        .onChange(of: mediaVM.videoCropRect) {
             updateVideoMesh()
         }
         .onChange(of: mediaVM.videoBobEnabled) {
@@ -330,9 +354,7 @@ struct ImmersiveView: View {
             return
         }
 
-        let width = Float(mediaVM.videoSize.width)
-        let height = Float(mediaVM.videoSize.height)
-        let mesh = makeCurvedPanelMesh(width: width, height: height, curve: mediaVM.videoCurveAmount)
+        let (mesh, width, height) = makeVideoPanelMesh()
 
         if (mediaVM.videoBackgroundRemovalEnabled || mediaVM.videoForegroundKeyEnabled), let pump = videoFramePump {
             recreateVideoEntityWithBackgroundRemoval(player: player, pump: pump, mesh: mesh, width: width, height: height)
@@ -455,9 +477,23 @@ struct ImmersiveView: View {
     /// 既存 video entity のメッシュを湾曲量に合わせて差し替える (entity 再生成なし)。
     private func updateVideoMesh() {
         guard let entity = videoEntity else { return }
-        let width = Float(mediaVM.videoSize.width)
-        let height = Float(mediaVM.videoSize.height)
-        entity.model?.mesh = makeCurvedPanelMesh(width: width, height: height, curve: mediaVM.videoCurveAmount)
+        entity.model?.mesh = makeVideoPanelMesh().mesh
+    }
+
+    /// 動画パネル用メッシュ。黒フチ自動カットの検出矩形を反映し、
+    /// パネル寸法をコンテンツ部分の比率に縮めつつ UV をクロップする。
+    private func makeVideoPanelMesh() -> (mesh: MeshResource, width: Float, height: Float) {
+        let crop = mediaVM.videoAutoCropEnabled ? mediaVM.videoCropRect : CGRect(x: 0, y: 0, width: 1, height: 1)
+        let width = Float(mediaVM.videoSize.width) * Float(crop.width)
+        let height = Float(mediaVM.videoSize.height) * Float(crop.height)
+        let mesh = makeCurvedPanelMesh(
+            width: width,
+            height: height,
+            curveH: mediaVM.videoCurveAmount,
+            curveV: mediaVM.videoCurveVAmount,
+            uvRect: crop
+        )
+        return (mesh, width, height)
     }
 
     // MARK: - Slideshow Panel Curve
@@ -501,17 +537,31 @@ struct ImmersiveView: View {
     /// curve = 0 でフラット、>0 でこちら向きの凹面、<0 で奥向きの凸面の
     /// 円筒セクションメッシュを生成する。湾曲は水平方向のみで縦は直線。
     /// 既存呼び出し互換 (水平湾曲のみ)。動画パネルはこちらを使う。
-    private func makeCurvedPanelMesh(width: Float, height: Float, curve: Float) -> MeshResource {
-        makeCurvedPanelMesh(width: width, height: height, curveH: curve, curveV: 0)
+    private func makeCurvedPanelMesh(
+        width: Float,
+        height: Float,
+        curve: Float,
+        uvRect: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+    ) -> MeshResource {
+        makeCurvedPanelMesh(width: width, height: height, curveH: curve, curveV: 0, uvRect: uvRect)
     }
 
     /// 水平 (curveH)・垂直 (curveV) の 2 軸湾曲パネルメッシュを生成する。
     /// 正値 = こちら向き (端がユーザー側 +Z)、負値 = 奥向き。両軸有効時は変位を加算した球面近似。
     /// アーク長 = パネル寸法を保つため、湾曲を強めても表示面積は変わらない。
-    private func makeCurvedPanelMesh(width: Float, height: Float, curveH: Float, curveV: Float) -> MeshResource {
+    /// `uvRect` でテクスチャの一部だけを貼れる (黒フチ自動カット用。正規化・原点左下)。
+    private func makeCurvedPanelMesh(
+        width: Float,
+        height: Float,
+        curveH: Float,
+        curveV: Float,
+        uvRect: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+    ) -> MeshResource {
         let hActive = abs(curveH) >= 0.01
         let vActive = abs(curveV) >= 0.01
-        if !hActive && !vActive {
+        let fullUV = abs(uvRect.minX) < 0.001 && abs(uvRect.minY) < 0.001
+            && abs(uvRect.width - 1) < 0.001 && abs(uvRect.height - 1) < 0.001
+        if !hActive && !vActive && fullUV {
             return MeshResource.generatePlane(width: width, height: height)
         }
 
@@ -557,7 +607,10 @@ struct ImmersiveView: View {
                     cos(thetaH) * cos(thetaV)
                 )
                 normals.append(simd_normalize(n))
-                uvs.append(SIMD2<Float>(uNorm, vNorm))
+                uvs.append(SIMD2<Float>(
+                    Float(uvRect.minX) + uNorm * Float(uvRect.width),
+                    Float(uvRect.minY) + vNorm * Float(uvRect.height)
+                ))
             }
         }
 

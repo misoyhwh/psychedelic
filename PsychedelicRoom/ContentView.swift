@@ -397,31 +397,52 @@ struct ContentView: View {
                 .pickerStyle(.segmented)
 
                 if mediaVM.videoSourceMode == .localFile {
-                    // File picker button
+                    // File / folder picker button
                     Button {
                         showVideoFilePicker = true
                     } label: {
-                        Label(mediaVM.videoURL != nil ? mediaVM.videoURL!.lastPathComponent : "動画ファイルを選択",
-                              systemImage: "folder")
+                        Label(localVideoPickerLabel, systemImage: "folder")
                     }
                     .buttonStyle(.bordered)
                     .fileImporter(
                         isPresented: $showVideoFilePicker,
-                        allowedContentTypes: [.movie, .video, .mpeg4Movie, .quickTimeMovie],
+                        allowedContentTypes: [.folder, .movie, .video, .mpeg4Movie, .quickTimeMovie],
                         allowsMultipleSelection: false
                     ) { result in
                         if case .success(let urls) = result, let url = urls.first {
-                            mediaVM.loadVideo(url: url)
-                            mediaVM.playVideo()
+                            if url.hasDirectoryPath {
+                                mediaVM.loadLocalVideoFolder(url: url)
+                            } else {
+                                mediaVM.selectLocalVideoFile(url: url)
+                            }
                         }
+                    }
+
+                    Text("フォルダを選ぶと中の動画を連続再生します")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+
+                    if mediaVM.videoLocalFolderURL != nil {
+                        Picker("並び順", selection: Binding(
+                            get: { mediaVM.videoLocalSortOrder },
+                            set: {
+                                mediaVM.videoLocalSortOrder = $0
+                                mediaVM.applyLocalVideoSort()
+                            }
+                        )) {
+                            ForEach(LocalVideoSortOrder.allCases) { order in
+                                Text(order.displayName).tag(order)
+                            }
+                        }
+                        .pickerStyle(.segmented)
                     }
                 } else {
                     videoServerSearchControls
                 }
 
                 if mediaVM.player != nil {
-                    // Playlist navigation (Server mode only)
-                    if mediaVM.videoSourceMode == .serverSearch && !mediaVM.videoPlaylist.isEmpty {
+                    // Playlist navigation (server search / local folder 共通)
+                    if !mediaVM.videoPlaylist.isEmpty {
                         if let name = currentVideoDisplayName, !name.isEmpty {
                             Text(name)
                                 .font(.caption)
@@ -533,7 +554,7 @@ struct ContentView: View {
                     }
 
                     VStack(alignment: .leading) {
-                        Text("パネル湾曲: \(videoCurveLabel)")
+                        Text("水平湾曲: \(videoCurveLabel)")
                         Slider(value: Binding(
                             get: { mediaVM.videoCurveAmount },
                             set: { mediaVM.videoCurveAmount = $0 }
@@ -544,6 +565,49 @@ struct ContentView: View {
                             Text("まっすぐ").font(.caption2).foregroundStyle(.secondary)
                             Spacer()
                             Text("こちら向き →").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+
+                    VStack(alignment: .leading) {
+                        Text("垂直湾曲: \(videoCurveVLabel)")
+                        Slider(value: Binding(
+                            get: { mediaVM.videoCurveVAmount },
+                            set: { mediaVM.videoCurveVAmount = $0 }
+                        ), in: -1.0...1.0, step: 0.05)
+                        HStack {
+                            Text("← 奥向き").font(.caption2).foregroundStyle(.secondary)
+                            Spacer()
+                            Text("まっすぐ").font(.caption2).foregroundStyle(.secondary)
+                            Spacer()
+                            Text("こちら向き →").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+
+                    // Auto crop black borders (黒フチ自動カット)
+                    Toggle("黒フチ自動カット", isOn: Binding(
+                        get: { mediaVM.videoAutoCropEnabled },
+                        set: {
+                            mediaVM.videoAutoCropEnabled = $0
+                            if $0 {
+                                mediaVM.startVideoAutoCrop()
+                            } else {
+                                mediaVM.stopVideoAutoCrop()
+                            }
+                        }
+                    ))
+                    .toggleStyle(.switch)
+
+                    if mediaVM.videoAutoCropEnabled {
+                        Text("映像の外周から黒帯を検出し、パネルをコンテンツ部分だけに切り詰めます")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        VStack(alignment: .leading) {
+                            Text("黒判定しきい値: \(String(format: "%.2f", mediaVM.videoCropThreshold))")
+                            Slider(value: Binding(
+                                get: { mediaVM.videoCropThreshold },
+                                set: { mediaVM.videoCropThreshold = $0 }
+                            ), in: 0.02...0.2, step: 0.01)
                         }
                     }
 
@@ -1252,6 +1316,14 @@ struct ContentView: View {
         return v > 0 ? "こちら向き \(pct)%" : "奥向き \(pct)%"
     }
 
+    /// 動画パネル垂直湾曲スライダーの数値ラベル。
+    private var videoCurveVLabel: String {
+        let v = mediaVM.videoCurveVAmount
+        if abs(v) < 0.01 { return "まっすぐ" }
+        let pct = Int(round(abs(v) * 100))
+        return v > 0 ? "こちら向き \(pct)%" : "奥向き \(pct)%"
+    }
+
     /// 動画パネル湾曲スライダーの数値ラベル。
     private var videoCurveLabel: String {
         let v = mediaVM.videoCurveAmount
@@ -1527,6 +1599,17 @@ struct ContentView: View {
     }
 
     /// 現在再生中の動画のタグ (サーバ検索由来のみ)。
+    /// ローカル動画ピッカーのボタンラベル (フォルダ名 > ファイル名 > プレースホルダ)。
+    private var localVideoPickerLabel: String {
+        if let folder = mediaVM.videoLocalFolderURL {
+            return "📁 \(folder.lastPathComponent)"
+        }
+        if let url = mediaVM.videoURL, url.isFileURL {
+            return url.lastPathComponent
+        }
+        return "動画ファイル / フォルダを選択"
+    }
+
     private var currentVideoTags: [String] {
         let idx = mediaVM.videoPlaylistIndex
         guard idx >= 0, idx < mediaVM.videoPlaylist.count else { return [] }
@@ -1652,20 +1735,26 @@ struct ContentView: View {
             ))
             .toggleStyle(.switch)
 
+            // Color Source は Video Color Mode / Video 系ティントパターン / Media 系パターン
+            // (Kaleido・Tunnel・Ripple) の共通ソースなので常時表示する
+            Picker("Color Source", selection: Binding(
+                get: { appModel.colorSource },
+                set: { appModel.colorSource = $0 }
+            )) {
+                ForEach(AppModel.ColorSource.allCases) { source in
+                    Text(source.rawValue).tag(source)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Text("Color Mode・Video/Media 系パターンの映像ソース")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+
             if appModel.videoColorMode {
                 Text("パネルの端の色を部屋に反映します")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-
-                Picker("Color Source", selection: Binding(
-                    get: { appModel.colorSource },
-                    set: { appModel.colorSource = $0 }
-                )) {
-                    ForEach(AppModel.ColorSource.allCases) { source in
-                        Text(source.rawValue).tag(source)
-                    }
-                }
-                .pickerStyle(.segmented)
 
                 HStack(spacing: 8) {
                     let top = appModel.colorSource == .slideshow ? mediaVM.slideshowColorTop : mediaVM.videoColorTop

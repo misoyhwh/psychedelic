@@ -36,6 +36,14 @@ class SceneReconstructor {
     private var videoColorTop: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
     private var videoColorMiddle: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
     private var videoColorBottom: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
+    /// 動画色の履歴 (Video Ripple 用、[0] が最新)
+    private var videoColorHistory: [SIMD3<Float>] = []
+    /// 動画フレーム供給元 (Video Kaleido / Tunnel 用)。ImmersiveView が MediaPanelViewModel に接続する。
+    var videoFrameProvider: (() -> CVPixelBuffer?)?
+    /// 静止画 (現在のスライド) 供給元。Color Source が Slideshow のとき、または動画フレームが無いときに使う。
+    var stillImageProvider: (() -> CGImage?)?
+    /// Color Source の選択 (true = Slideshow)。Kaleido/Tunnel/Ripple のソース切替に使う。
+    private var mediaSourceIsSlideshow: Bool = false
 
     // Classification-split entities (used for video color mode and video patterns)
     private var ceilingEntities: [UUID: ModelEntity] = [:]
@@ -139,7 +147,9 @@ class SceneReconstructor {
                           videoColorMode: Bool,
                           videoColorTop: SIMD3<Float>,
                           videoColorMiddle: SIMD3<Float>,
-                          videoColorBottom: SIMD3<Float>) {
+                          videoColorBottom: SIMD3<Float>,
+                          videoColorHistory: [SIMD3<Float>] = [],
+                          mediaSourceIsSlideshow: Bool = false) {
         let oldSplitMode = self.splitMode
 
         self.speed = speed
@@ -153,6 +163,8 @@ class SceneReconstructor {
         self.videoColorTop = videoColorTop
         self.videoColorMiddle = videoColorMiddle
         self.videoColorBottom = videoColorBottom
+        self.videoColorHistory = videoColorHistory
+        self.mediaSourceIsSlideshow = mediaSourceIsSlideshow
 
         let filterChanged = self.classificationFilter != classificationFilter
         self.classificationFilter = classificationFilter
@@ -483,6 +495,9 @@ class SceneReconstructor {
         case .videoInterference: return 13
         case .videoRainbow: return 14
         case .videoAurora: return 15
+        case .videoKaleido: return 16
+        case .videoTunnel: return 17
+        case .videoRipple: return 18
         case .occlusion: return -1
         }
     }
@@ -571,11 +586,29 @@ class SceneReconstructor {
         }
 
         // Generate texture (for both normal and video pattern modes)
+        // Kaleido / Tunnel は動画フレーム or 現在のスライド画像をシェーダに供給する。
+        // Color Source = Slideshow なら画像優先、Video なら動画優先で無ければ画像にフォールバック。
+        let needsMediaFrame = style == .videoKaleido || style == .videoTunnel
+        var pixelBuffer: CVPixelBuffer? = nil
+        var stillImage: CGImage? = nil
+        if needsMediaFrame {
+            if mediaSourceIsSlideshow {
+                stillImage = stillImageProvider?()
+            } else {
+                pixelBuffer = videoFrameProvider?()
+                if pixelBuffer == nil {
+                    stillImage = stillImageProvider?()
+                }
+            }
+        }
         textureGenerator?.updateTexture(
             time: currentTime,
             speed: speed,
             intensity: intensity,
-            styleIndex: styleIndex
+            styleIndex: styleIndex,
+            videoPixelBuffer: pixelBuffer,
+            stillImage: stillImage,
+            colorHistory: videoColorHistory
         )
 
         if isVideoPattern {

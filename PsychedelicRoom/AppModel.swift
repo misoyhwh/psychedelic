@@ -190,6 +190,9 @@ class AppModel {
         case videoInterference = "Video Interference"
         case videoRainbow = "Video Rainbow"
         case videoAurora = "Video Aurora"
+        case videoKaleido = "Media Kaleido"
+        case videoTunnel = "Media Tunnel"
+        case videoRipple = "Media Ripple"
         case occlusion = "Occlusion"
 
         var id: String { rawValue }

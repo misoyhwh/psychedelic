@@ -8,6 +8,8 @@ struct PsychedelicParams {
     int styleIndex;
     int width;
     int height;
+    int hasVideoTexture;   // 動画フレームが texture(1) にバインドされているか
+    int historyCount;      // colorHistory (buffer(1)) の要素数
 };
 
 float3 hsvToRgb(float h, float s, float v) {
@@ -606,9 +608,60 @@ float4 videoAuroraPattern(float2 uv, float t, float intensity) {
     return float4(lum, lum, lum, 0.85);
 }
 
+// 万華鏡: 動画フレームを放射状に折り返して部屋全体に映す
+float4 videoKaleidoPattern(float2 uv, float t, float intensity,
+                           texture2d<float, access::sample> videoTex) {
+    constexpr sampler s(address::mirrored_repeat, filter::linear);
+    float2 p = uv - 0.5;
+    float r = length(p);
+    float a = atan2(p.y, p.x);
+    // 強度でセグメント数 (6...10)。ゆっくり回転させる
+    float segments = 6.0 + floor(clamp(intensity, 0.0, 2.0) * 2.0);
+    float seg = 2.0 * M_PI_F / segments;
+    a = fmod(a + t * 0.2 + 2.0 * M_PI_F, seg);
+    a = abs(a - seg * 0.5);
+    // ズームを脈動させて動画の別の場所が流れ込むように
+    float zoom = 0.7 + 0.3 * sin(t * 0.27);
+    float2 sampleUV = float2(0.5) + float2(cos(a), sin(a)) * r * zoom;
+    float4 c = videoTex.sample(s, sampleUV);
+    return float4(c.rgb, 0.9);
+}
+
+// トンネル: 動画を極座標マッピングし、壁が動画の色でトンネル状に流れる
+float4 videoTunnelPattern(float2 uv, float t, float intensity,
+                          texture2d<float, access::sample> videoTex) {
+    constexpr sampler s(address::mirrored_repeat, filter::linear);
+    float2 p = uv - 0.5;
+    float r = max(length(p), 1e-3);
+    float a = atan2(p.y, p.x);
+    float u = a / (2.0 * M_PI_F) + t * 0.05;
+    float v = fract(0.2 * clamp(intensity, 0.2, 2.0) / r - t * 0.25);
+    float4 c = videoTex.sample(s, float2(u, v));
+    // 中心 (無限遠) の特異点はフェードして荒れを隠す
+    float fade = smoothstep(0.02, 0.18, r);
+    return float4(c.rgb * fade, 0.9);
+}
+
+// 波紋: 動画色の履歴 (history[0] が最新) が中心から外周へ伝播していく
+float4 videoRipplePattern(float2 uv, float t, float intensity,
+                          constant float3* history, int count) {
+    float2 p = uv - 0.5;
+    float dist = length(p) * 2.0;   // 中心 0 ... 隅 ~1.4
+    // 距離が遠いほど過去の色。intensity で伝播の速さ (小さいほど過去まで見える)
+    float idxF = clamp(dist * float(count - 1) / max(intensity, 0.2), 0.0, float(count - 1));
+    int i0 = int(idxF);
+    int i1 = min(i0 + 1, count - 1);
+    float3 c = mix(history[i0], history[i1], fract(idxF));
+    // 同心円の輝度変調で「波」の動きを可視化
+    float wave = 0.75 + 0.25 * sin(dist * 24.0 - t * 3.0);
+    return float4(c * wave, 0.9);
+}
+
 kernel void generatePsychedelicTexture(
     texture2d<half, access::write> output [[texture(0)]],
+    texture2d<float, access::sample> videoTex [[texture(1)]],
     constant PsychedelicParams& params [[buffer(0)]],
+    constant float3* colorHistory [[buffer(1)]],
     uint2 gid [[thread_position_in_grid]])
 {
     if (gid.x >= uint(params.width) || gid.y >= uint(params.height)) return;
@@ -636,6 +689,22 @@ kernel void generatePsychedelicTexture(
         case 13: color = videoInterferencePattern(uv, t, params.intensity); break;
         case 14: color = videoRainbowPattern(uv, t, params.intensity); break;
         case 15: color = videoAuroraPattern(uv, t, params.intensity); break;
+        case 16:
+            // 動画フレーム未取得の間は通常パターンでつなぐ
+            color = params.hasVideoTexture != 0
+                ? videoKaleidoPattern(uv, t, params.intensity, videoTex)
+                : psychedelicPattern(uv, t, params.intensity);
+            break;
+        case 17:
+            color = params.hasVideoTexture != 0
+                ? videoTunnelPattern(uv, t, params.intensity, videoTex)
+                : psychedelicPattern(uv, t, params.intensity);
+            break;
+        case 18:
+            color = params.historyCount > 0
+                ? videoRipplePattern(uv, t, params.intensity, colorHistory, params.historyCount)
+                : psychedelicPattern(uv, t, params.intensity);
+            break;
         default: color = psychedelicPattern(uv, t, params.intensity); break;
     }
 
