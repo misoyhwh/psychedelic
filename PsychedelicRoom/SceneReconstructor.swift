@@ -498,6 +498,11 @@ class SceneReconstructor {
         case .videoKaleido: return 16
         case .videoTunnel: return 17
         case .videoRipple: return 18
+        case .mediaDirect: return 19
+        case .mediaStainedGlass: return 20
+        case .mediaLiquid: return 21
+        case .mediaDroste: return 22
+        case .mediaGlitch: return 23
         case .occlusion: return -1
         }
     }
@@ -588,7 +593,9 @@ class SceneReconstructor {
         // Generate texture (for both normal and video pattern modes)
         // Kaleido / Tunnel は動画フレーム or 現在のスライド画像をシェーダに供給する。
         // Color Source = Slideshow なら画像優先、Video なら動画優先で無ければ画像にフォールバック。
-        let needsMediaFrame = style == .videoKaleido || style == .videoTunnel
+        let needsMediaFrame = style == .videoKaleido || style == .videoTunnel || style == .mediaDirect
+            || style == .mediaStainedGlass || style == .mediaLiquid
+            || style == .mediaDroste || style == .mediaGlitch
         var pixelBuffer: CVPixelBuffer? = nil
         var stillImage: CGImage? = nil
         if needsMediaFrame {

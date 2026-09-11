@@ -608,6 +608,125 @@ float4 videoAuroraPattern(float2 uv, float t, float intensity) {
     return float4(lum, lum, lum, 0.85);
 }
 
+// そのまま投影: メディアを完全無変換で部屋に貼る (Glitch からグリッチ効果を抜いたもの)。
+// ドリフト等を入れるとミラーリピート領域に入り上下反転して見えるため、動きは付けない。
+float4 mediaDirectPattern(float2 uv,
+                          texture2d<float, access::sample> videoTex) {
+    constexpr sampler s(address::mirrored_repeat, filter::linear);
+    float4 c = videoTex.sample(s, uv);
+    return float4(c.rgb, 0.9);
+}
+
+// ステンドグラス: ボロノイセルごとにメディアの色を 1 色抽出して塗り、黒い縁取りを付ける。
+// intensity でセル数 (5...13)。セル中心はゆっくり漂う。
+float4 mediaStainedGlassPattern(float2 uv, float t, float intensity,
+                                texture2d<float, access::sample> videoTex) {
+    constexpr sampler s(address::mirrored_repeat, filter::linear);
+    float cells = 5.0 + clamp(intensity, 0.0, 2.0) * 4.0;
+    float2 p = uv * cells;
+    float2 ip = floor(p);
+    float2 fp = fract(p);
+
+    float minDist1 = 10.0;
+    float minDist2 = 10.0;
+    float2 siteUV = uv;
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            float2 neighbor = float2(float(x), float(y));
+            float2 offset = voronoiHash(ip + neighbor);
+            offset = 0.5 + 0.4 * sin(t * 0.15 + offset * 6.2831);
+            float2 diff = neighbor + offset - fp;
+            float dist = length(diff);
+            if (dist < minDist1) {
+                minDist2 = minDist1;
+                minDist1 = dist;
+                siteUV = (ip + neighbor + offset) / cells;
+            } else if (dist < minDist2) {
+                minDist2 = dist;
+            }
+        }
+    }
+
+    // セルの色 = メディアのセル中心 1 点の色 (フラット塗り)
+    float3 c = videoTex.sample(s, siteUV).rgb;
+    // ガラスらしい彩度ブースト + セル内の緩い明暗
+    float gray = dot(c, float3(0.299, 0.587, 0.114));
+    c = clamp(mix(float3(gray), c, 1.4), 0.0, 1.0);
+    c *= 0.75 + 0.35 * exp(-minDist1 * 2.0);
+    // 黒い鉛線 (セル境界)
+    float edge = minDist2 - minDist1;
+    float lead = 1.0 - smoothstep(0.0, 0.09, edge);
+    c = mix(c, float3(0.02), lead * 0.9);
+    return float4(c, 0.9);
+}
+
+// 溶解フロー: fBM ノイズで UV を歪ませ、メディアがマーブル状に溶けて流れる。
+// intensity で歪み量。色は 100% メディア由来。
+float4 mediaLiquidPattern(float2 uv, float t, float intensity,
+                          texture2d<float, access::sample> videoTex) {
+    constexpr sampler s(address::mirrored_repeat, filter::linear);
+    float amt = 0.28 * clamp(intensity, 0.0, 2.0);
+    float2 q = uv * 3.0;
+    float n1 = fbm(q + float2(t * 0.15, -t * 0.10));
+    float n2 = fbm(q * 1.3 + float2(-t * 0.12, t * 0.17) + n1 * 1.5);
+    float2 warp = float2(n1 - 0.5, n2 - 0.5) * amt * 2.0;
+    float3 c = videoTex.sample(s, uv + warp).rgb;
+    // 流れに沿ったわずかな艶
+    float sheen = 0.9 + 0.1 * sin(n2 * 6.2831 + t * 0.8);
+    return float4(c * sheen, 0.9);
+}
+
+// 無限ズーム (ドロステ風): メディアフレームが回転しながら再帰的にズームし、
+// 中心へ吸い込まれ続ける。intensity でズーム速度。
+float4 mediaDrostePattern(float2 uv, float t, float intensity,
+                          texture2d<float, access::sample> videoTex) {
+    constexpr sampler s(address::mirrored_repeat, filter::linear);
+    float2 p = uv - 0.5;
+    float cycle = fract(t * 0.08 * clamp(intensity, 0.2, 2.0));
+    float3 acc = float3(0.0);
+    float wsum = 0.0;
+    for (int k = 0; k < 4; k++) {
+        float layer = float(k) + cycle;          // 0...4 連続
+        float scale = exp2(layer - 1.5);
+        float ang = layer * 0.5 + t * 0.05;
+        float ca = cos(ang), sa = sin(ang);
+        float2 q = float2(ca * p.x - sa * p.y, sa * p.x + ca * p.y) * scale;
+        float3 c = videoTex.sample(s, float2(0.5) + q).rgb;
+        // 端のレイヤーはフェードさせてループの継ぎ目を隠す
+        float w = smoothstep(0.0, 1.0, layer) * smoothstep(4.0, 3.0, layer);
+        acc += c * w;
+        wsum += w;
+    }
+    return float4(acc / max(wsum, 1e-3), 0.9);
+}
+
+// VHS グリッチ: 水平スライスのずれ + 色収差 + 走査線でメディアを投影。
+// intensity でグリッチの強さ。映像の判読性は保つ。
+float4 mediaGlitchPattern(float2 uv, float t, float intensity,
+                          texture2d<float, access::sample> videoTex) {
+    constexpr sampler s(address::mirrored_repeat, filter::linear);
+    float amt = clamp(intensity, 0.0, 2.0);
+    float seed = floor(t * 6.0);
+    float rowBlock = floor(uv.y * 24.0);
+    // 一部の行だけ横ずれ (ゲートを 2 段の乱数で制御)
+    float gate = step(0.72, pseudoNoise(float2(seed, rowBlock * 1.7)));
+    float shift = (pseudoNoise(float2(rowBlock, seed)) - 0.5) * 0.10 * amt * gate;
+    // まれに全体が縦に跳ねる
+    float jumpGate = step(0.94, pseudoNoise(float2(seed, 3.33)));
+    float jump = (pseudoNoise(float2(seed, 7.77)) - 0.5) * 0.08 * amt * jumpGate;
+    float2 suv = uv + float2(shift, jump);
+    // 色収差 (グリッチ行では強める)
+    float ca = 0.003 * amt * (1.0 + 3.0 * gate);
+    float r = videoTex.sample(s, suv + float2(ca, 0.0)).r;
+    float g = videoTex.sample(s, suv).g;
+    float b = videoTex.sample(s, suv - float2(ca, 0.0)).b;
+    float3 c = float3(r, g, b);
+    // 走査線 + ゆっくり流れる帯ノイズ
+    float scan = 0.88 + 0.12 * sin(uv.y * 260.0 + t * 8.0);
+    float band = 0.95 + 0.05 * sin(uv.y * 6.0 - t * 1.5);
+    return float4(c * scan * band, 0.9);
+}
+
 // 万華鏡: 動画フレームを放射状に折り返して部屋全体に映す
 float4 videoKaleidoPattern(float2 uv, float t, float intensity,
                            texture2d<float, access::sample> videoTex) {
@@ -703,6 +822,31 @@ kernel void generatePsychedelicTexture(
         case 18:
             color = params.historyCount > 0
                 ? videoRipplePattern(uv, t, params.intensity, colorHistory, params.historyCount)
+                : psychedelicPattern(uv, t, params.intensity);
+            break;
+        case 19:
+            color = params.hasVideoTexture != 0
+                ? mediaDirectPattern(uv, videoTex)
+                : psychedelicPattern(uv, t, params.intensity);
+            break;
+        case 20:
+            color = params.hasVideoTexture != 0
+                ? mediaStainedGlassPattern(uv, t, params.intensity, videoTex)
+                : voronoiPattern(uv, t, params.intensity);
+            break;
+        case 21:
+            color = params.hasVideoTexture != 0
+                ? mediaLiquidPattern(uv, t, params.intensity, videoTex)
+                : psychedelicPattern(uv, t, params.intensity);
+            break;
+        case 22:
+            color = params.hasVideoTexture != 0
+                ? mediaDrostePattern(uv, t, params.intensity, videoTex)
+                : psychedelicPattern(uv, t, params.intensity);
+            break;
+        case 23:
+            color = params.hasVideoTexture != 0
+                ? mediaGlitchPattern(uv, t, params.intensity, videoTex)
                 : psychedelicPattern(uv, t, params.intensity);
             break;
         default: color = psychedelicPattern(uv, t, params.intensity); break;

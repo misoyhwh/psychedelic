@@ -190,9 +190,14 @@ class AppModel {
         case videoInterference = "Video Interference"
         case videoRainbow = "Video Rainbow"
         case videoAurora = "Video Aurora"
+        case mediaDirect = "Media Direct"
         case videoKaleido = "Media Kaleido"
         case videoTunnel = "Media Tunnel"
         case videoRipple = "Media Ripple"
+        case mediaStainedGlass = "Media Stained Glass"
+        case mediaLiquid = "Media Liquid"
+        case mediaDroste = "Media Droste"
+        case mediaGlitch = "Media Glitch"
         case occlusion = "Occlusion"
 
         var id: String { rawValue }
